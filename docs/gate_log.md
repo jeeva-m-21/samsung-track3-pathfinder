@@ -154,3 +154,30 @@ Scope OK for WP-24
   - Output format unchanged: YES
   - decisions.md updated for every deviation: YES (no deviations)
 - Verdict: PASS
+
+## Work Packet WP-25 Verification
+- Date: 2026-11-06T16:25:00+05:30
+- Commands:
+  - `bash scripts/check_scope.sh WP-25`
+  - `PATH=".venv/bin:$PATH" PYTHONPATH=. pytest tests/test_monitor.py`
+  - `PATH=".venv/bin:$PATH" PYTHONPATH=. pytest -q`
+- Output:
+```
+Scope OK for WP-25
+============================== 16 passed in 0.12s ==============================
+........................................................................ [ 60%]
+................................................                         [100%]
+120 passed in 2.45s
+```
+- Mutation check: Mutated quality score calculation (`val = 2.0 / n`) in `src/ref/monitor.py`; failed `test_quality_score_clamping` (exit code 1); restored and verified 16/16 passed.
+- Checklist:
+  - High-frequency residual tracking for accel and gyro: YES (Euclidean norm residuals r_k and rho_k tested on identical vectors, 3D displacements, and lists)
+  - Exponential moving variance with alpha = 0.01: YES (formula and asymptotic convergence verified)
+  - Reference variance initialization from first 1.0s window: YES (tracks during static window, freezes at T_init=1.0s, nominal quality=1.0 and kappa=1.0)
+  - Quality score falls monotonically as noise grows: YES (verified across progressive noise multipliers 1x to 64x; bounds 1.0 to 0.05 respected)
+  - Inflation factor kappa = clamp(n, 1.0, kappa_max) where kappa_max = 50.0: YES (verified bounds [1.0, 50.0] and monotonic increase)
+  - Static stationary gyro bias observation helper: YES (H=[0,0,0,I,0], R=sigma_bgm^2*I, innovation, bias trend EMA, and ESKF measurement update verified)
+  - No magic numbers, constants from params.json, no global state, pure functions / fixed-size ring buffer, portable to C++: YES
+  - Output format unchanged: YES
+  - decisions.md updated for every deviation: YES (no deviations)
+- Verdict: PASS
