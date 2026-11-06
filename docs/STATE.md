@@ -6,7 +6,7 @@ Last passed gate: none
 | WP | Status | Owner | Attempts | Last note |
 |---|---|---|---|---|
 | WP-00 | DONE | Conductor | 0 | Scaffolding complete, gate G0 verified and reviewed PASS |
-| WP-01 | TODO | Harness | 0 | Footprint probe and tool checks |
+| WP-01 | IN_PROGRESS | Harness | 0 | Running memory probe and tool verification |
 | WP-10 | TODO | Harness | 0 | tools/synth.py: analytic trajectories |
 | WP-11 | TODO | Harness | 0 | tools/degrade.py + config |
 | WP-12 | TODO | Harness | 0 | tools/validate_trajectory.py |
