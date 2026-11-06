@@ -36,3 +36,20 @@ GATE G1 PASS
 ```
 - Verdict: PASS
 
+## Work Packet WP-20 Verification
+- Date: 2026-11-06T15:15:00+05:30
+- Commands:
+  - `bash scripts/check_scope.sh WP-20`
+  - `PATH=".venv/bin:$PATH" PYTHONPATH=. pytest tests/test_mathlib.py`
+  - `PATH=".venv/bin:$PATH" PYTHONPATH=. pytest -q`
+- Output:
+```
+Scope OK for WP-20
+============================== 9 passed in 0.14s ===============================
+...........................................                              [100%]
+43 passed in 1.97s
+```
+- Mutation check: Mutated `skew` anti-symmetry in `src/ref/mathlib.py`; pytest failed with 2 failures (exit code 1); restored and verified 9/9 passed.
+- Verdict: PASS
+
+
