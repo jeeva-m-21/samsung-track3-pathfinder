@@ -1,0 +1,12 @@
+{
+  "noise_growth_rate": 0.05,
+  "bias_drift_walk": 0.001,
+  "dropouts": [
+    {"start_s": 10.0, "duration_s": 1.5, "encoding": "missing"},
+    {"start_s": 25.0, "duration_s": 2.0, "encoding": "nan"},
+    {"start_s": 40.0, "duration_s": 1.0, "encoding": "zeros"},
+    {"start_s": 55.0, "duration_s": 0.8, "encoding": "repeated"}
+  ],
+  "gravity_rotation": true,
+  "failure_at_end_s": 5.0
+}

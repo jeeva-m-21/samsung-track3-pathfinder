@@ -1,0 +1,15 @@
+{
+  "noise_mult_gyro": {"low": 1.0, "high": 100.0, "log": true},
+  "noise_mult_acc": {"low": 1.0, "high": 100.0, "log": true},
+  "walk_mult_bg": {"low": 1.0, "high": 200.0, "log": true},
+  "walk_mult_ba": {"low": 1.0, "high": 200.0, "log": true},
+  "kappa_max": {"low": 5.0, "high": 200.0, "log": true},
+  "tilt_tau_a": {"low": 0.1, "high": 1.0, "log": false},
+  "tilt_sigma": {"low": 0.005, "high": 0.1, "log": true},
+  "zupt_sigma": {"low": 0.01, "high": 0.2, "log": true},
+  "tau_gap": {"low": 0.5, "high": 10.0, "log": true},
+  "recover_steps": {"low": 20, "high": 400, "step": 1, "type": "int"},
+  "tau_v": {"low": 0.5, "high": 10.0, "log": true},
+  "tau_omega": {"low": 0.3, "high": 5.0, "log": true},
+  "shrink_v": {"low": 0.5, "high": 1.0, "log": false}
+}

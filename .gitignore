@@ -1,0 +1,9 @@
+data/
+build/
+*.o
+*.so
+*.a
+__pycache__/
+*.pyc
+results/tmp/
+.venv/
