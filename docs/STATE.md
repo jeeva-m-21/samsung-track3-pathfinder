@@ -16,7 +16,7 @@ Last passed gate: G1
 | WP-20 | DONE | Estimator | 0 | mathlib.py implemented, 9/9 unit tests passed, reviewed PASS |
 | WP-21 | DONE | Estimator | 0 | Streaming CSV parser + 13 tests verified PASS |
 | WP-22 | DONE | Estimator | 0 | init.py & strapdown.py verified, static drift < 1e-6m, reviewed PASS |
-| WP-23 | TODO | Estimator | 0 | ref/eskf.py predict + Joseph update helper |
+| WP-23 | IN_PROGRESS | Estimator | 0 | Implementing eskf.py, test_eskf.py and test_jacobians.py |
 | WP-24 | TODO | Estimator | 0 | Tilt update and ZUPT |
 | WP-25 | TODO | Estimator | 0 | Degradation monitor (quality score) |
 | WP-26 | TODO | Estimator | 0 | Gap/dropout handler |
