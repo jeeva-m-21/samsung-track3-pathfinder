@@ -74,4 +74,28 @@ Scope OK for WP-21
   - decisions.md updated for every deviation: YES (no deviations)
 - Verdict: PASS
 
+## Work Packet WP-22 Verification
+- Date: 2026-11-06T15:40:00+05:30
+- Commands:
+  - `bash scripts/check_scope.sh WP-22`
+  - `PATH=".venv/bin:$PATH" PYTHONPATH=. pytest tests/test_init.py tests/test_strapdown.py`
+  - `PATH=".venv/bin:$PATH" PYTHONPATH=. pytest -q`
+- Output:
+```
+Scope OK for WP-22
+============================== 15 passed in 0.62s ==============================
+.......................................................................  [100%]
+71 passed in 2.71s
+```
+- Mutation check: Mutated position integration (`p_new = state.p + state.v * dt_f`) in `src/ref/strapdown.py`; pytest failed with 2 failures (exit code 1); restored and verified 7/7 passed.
+- Checklist:
+  - Tests exist for all items under "Tests first": YES (8 in test_init.py, 7 in test_strapdown.py)
+  - Static 60s IMU drift < 1e-6 m: YES (tested upright and arbitrarily tilted)
+  - No magic numbers; constants come from configs/params.json: YES
+  - No forbidden constructs (pure functions, no global state, no dicts in filter loops, fixed-size math): YES
+  - Output format unchanged: YES
+  - decisions.md updated for every deviation: YES (no deviations)
+- Verdict: PASS
+
+
 
