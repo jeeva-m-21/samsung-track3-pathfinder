@@ -19,7 +19,7 @@ Last passed gate: G1
 | WP-23 | DONE | Estimator | 0 | eskf.py + Joseph update + 13 tests verified PASS |
 | WP-24 | DONE | Estimator | 0 | Tilt update and ZUPT verified PASS, reviewed |
 | WP-25 | DONE | Estimator | 0 | Degradation monitor and quality score verified PASS, reviewed |
-| WP-26 | TODO | Estimator | 0 | Gap/dropout handler |
+| WP-26 | IN_PROGRESS | Estimator | 0 | Implementing gap.py and test_gap.py |
 | WP-27 | TODO | Estimator | 0 | Failure detector + blind-5 s predictor |
 | WP-28 | TODO | Estimator | 0 | ref/pipeline.py + CLI; ablations |
 | WP-30 | TODO | CppPort | 0 | C++ skeleton: stdio parser, timestamp writer, params.h |
