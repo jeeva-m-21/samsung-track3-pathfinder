@@ -12,7 +12,7 @@ Last passed gate: G0
 | WP-12 | DONE | Harness | 0 | Trajectory output validator and 7 unit tests verified PASS |
 | WP-13 | DONE | Harness | 0 | evo APE/RPE + segment metrics verified PASS |
 | WP-14 | DONE | Harness | 0 | Naive & Mahony baselines + quadratic drift test verified PASS |
-| WP-15 | TODO | Harness | 0 | tools/run_eval.py + results table writer |
+| WP-15 | IN_PROGRESS | Harness | 0 | Implementing run_eval.py and results table writer |
 | WP-20 | TODO | Estimator | 0 | ref/mathlib.py: quaternion, exp map, skew, rotation |
 | WP-21 | TODO | Estimator | 0 | ref/parser.py: tolerant streaming CSV reader |
 | WP-22 | TODO | Estimator | 0 | ref/init.py + strapdown only |
