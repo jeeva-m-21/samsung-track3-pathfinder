@@ -210,3 +210,33 @@ Scope OK for WP-26
   - decisions.md updated for every deviation: YES (no deviations)
 - Verdict: PASS
 
+## Work Packet WP-27 Verification
+- Date: 2026-11-07T00:13:00+05:30
+- Commands:
+  - `bash scripts/check_scope.sh WP-27`
+  - `PATH=".venv/bin:$PATH" PYTHONPATH=. pytest tests/test_blind.py`
+  - `PATH=".venv/bin:$PATH" PYTHONPATH=. pytest -q`
+- Output:
+```
+Scope OK for WP-27
+============================== 17 passed in 0.28s ==============================
+........................................................................ [ 47%]
+........................................................................ [ 95%]
+.......                                                                  [100%]
+151 passed in 2.71s
+```
+- Mutation check: Mutated position decay equation `decay_factor = 1.0 - math.exp(-2.0 * tau_val / tau_v_val)` in `src/ref/blind.py`; pytest failed with 1 failure (`test_predict_blind_position_math`, exit code 1); restored and verified 17/17 passed.
+- Checklist:
+  - Tests exist for all items under "Tests first": YES (17 tests covering all requirements)
+  - Failure declaration after T_fail (1.0 s) continuous invalid data: YES (`test_blind_predictor_continuous_invalid_trigger`, `test_blind_predictor_stream_end`)
+  - State rollback to pre-failure reliable state: YES (`test_rollback_to_reliable_prior_to_onset`, `test_reliable_ring_buffer_fifo`)
+  - Decaying velocity kinematic model: p(tau) = p_f + v_f * shrink_v * tau_v * (1 - exp(-tau/tau_v)): YES (`test_predict_blind_position_math`, `test_predict_blind_velocity`)
+  - Decaying turn rate kinematic model: q(tau) = q_f (x) exp(omega_f * tau_omega * (1 - exp(-tau/tau_omega))): YES (`test_predict_blind_orientation_math`)
+  - Stationary threshold (< 0.05 m/s) holds position stationary: YES (`test_predict_blind_position_stationary_threshold`)
+  - Poses beyond 5.0 s clamped to tau = 5.0 s pose: YES (`test_predict_blind_position_clamping_beyond_5s`, `test_predict_blind_orientation_clamping_beyond_5s`, `test_blind_predictor_generate_blind_poses`)
+  - Blind RMSE < naive open-loop integration on synthetic circle & figure-eight failures: YES (`test_acceptance_synth_circle_blind_rmse_vs_naive`, `test_acceptance_synth_figure_eight_blind_rmse_vs_naive`)
+  - No magic numbers, constants from params.json, no global state, pure functions / fixed-size ring buffer, portable to C++: YES (ReliableRingBuffer preallocated capacity 64, pure functions for extrapolation)
+  - Output format unchanged: YES
+  - decisions.md updated for every deviation: YES (no deviations)
+- Verdict: PASS
+
