@@ -7,7 +7,7 @@ Last passed gate: G0
 |---|---|---|---|---|
 | WP-00 | DONE | Conductor | 0 | Scaffolding complete, gate G0 verified and reviewed PASS |
 | WP-01 | DONE | Harness | 0 | Memory footprint probe completed and verified PASS |
-| WP-10 | IN_PROGRESS | Harness | 0 | Building tools/synth.py and test_synth.py |
+| WP-10 | DONE | Harness | 0 | 5 analytic trajectories + zero-noise strapdown verified PASS |
 | WP-11 | TODO | Harness | 0 | tools/degrade.py + config |
 | WP-12 | TODO | Harness | 0 | tools/validate_trajectory.py |
 | WP-13 | TODO | Harness | 0 | tools/metrics.py: evo wrapper + segment metrics |
