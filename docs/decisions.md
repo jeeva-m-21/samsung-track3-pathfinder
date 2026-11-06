@@ -8,6 +8,15 @@ Append-only log of non-obvious engineering decisions, assumptions, and tool find
 - **Decision / Assumption**: Description
 - **Rationale**: Justification or reference URL
 
+## 2026-11-06: Memory Footprint Probe
+- **Packet**: WP-01
+- **Findings**:
+  - Minimal dynamic binary (`empty_dyn`): Peak RSS = 1200 kbytes (~1.17 MB).
+  - Minimal static binary (`empty_static`): Peak RSS = 688 kbytes (~0.67 MB).
+- **Decision**:
+  - Prefer static linking (`-static`) for the C++ binary when possible to minimize startup RSS and eliminate dynamic linker overhead, staying well below the 4 MB internal limit and 8 MB hard budget.
+  - Python toolchain verified: `.venv` contains `numpy 2.5.4`, `scipy 1.18.1`, `pytest 9.2.0`, `evo 1.38.1`, `optuna 5.0.0`.
+
 ## 2026-11-06: Dataset Acquisition & Robustness
 - **Packet**: WP-01 prep / Data setup
 - **Action**: Acquired TUM-VI `room1` and `room2` sequences (IMU CSV and mocap ground truth) via targeted HTTP byte-range requests directly from `https://cdn2.vision.in.tum.de/tumvi/exported/euroc/512_16/`, avoiding ~3.4 GB of camera images. Acquired EuRoC ground truth trajectories for `MH_01_easy`, `V1_01_easy`, `V2_02_medium` from OpenVINS benchmark mirrors.
