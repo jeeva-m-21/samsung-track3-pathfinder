@@ -52,4 +52,26 @@ Scope OK for WP-20
 - Mutation check: Mutated `skew` anti-symmetry in `src/ref/mathlib.py`; pytest failed with 2 failures (exit code 1); restored and verified 9/9 passed.
 - Verdict: PASS
 
+## Work Packet WP-21 Verification
+- Date: 2026-11-06T15:26:00+05:30
+- Commands:
+  - `bash scripts/check_scope.sh WP-21`
+  - `PATH=".venv/bin:$PATH" PYTHONPATH=. pytest tests/test_parser.py`
+  - `PATH=".venv/bin:$PATH" PYTHONPATH=. pytest -q`
+- Output:
+```
+Scope OK for WP-21
+============================== 13 passed in 0.13s ==============================
+........................................................                 [100%]
+56 passed in 3.02s
+```
+- Mutation check: Mutated `is_valid = False` in `parse_imu_line` (`src/ref/parser.py`); pytest failed with 4 failures (exit code 1); restored and verified 13/13 passed.
+- Checklist:
+  - Tests exist for all items under "Tests first": YES
+  - No magic numbers; constants come from configs/params.json: YES
+  - No forbidden constructs (no global state, no dicts inside filter loops, fixed-size math): YES
+  - Output format unchanged: YES
+  - decisions.md updated for every deviation: YES (no deviations)
+- Verdict: PASS
+
 
