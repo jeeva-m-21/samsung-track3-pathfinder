@@ -18,7 +18,7 @@ Last passed gate: G1
 | WP-22 | DONE | Estimator | 0 | init.py & strapdown.py verified, static drift < 1e-6m, reviewed PASS |
 | WP-23 | DONE | Estimator | 0 | eskf.py + Joseph update + 13 tests verified PASS |
 | WP-24 | DONE | Estimator | 0 | Tilt update and ZUPT verified PASS, reviewed |
-| WP-25 | IN_PROGRESS | Estimator | 0 | Implementing monitor.py and test_monitor.py |
+| WP-25 | REVIEW | Estimator | 0 | Degradation monitor and quality score verified PASS |
 | WP-26 | TODO | Estimator | 0 | Gap/dropout handler |
 | WP-27 | TODO | Estimator | 0 | Failure detector + blind-5 s predictor |
 | WP-28 | TODO | Estimator | 0 | ref/pipeline.py + CLI; ablations |
