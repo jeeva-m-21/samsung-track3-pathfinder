@@ -1,12 +1,12 @@
 # STATE
 Updated: 2026-11-06T13:40:00+05:30 by Conductor
-Current phase: P0
-Last passed gate: none
+Current phase: P1
+Last passed gate: G0
 
 | WP | Status | Owner | Attempts | Last note |
 |---|---|---|---|---|
 | WP-00 | DONE | Conductor | 0 | Scaffolding complete, gate G0 verified and reviewed PASS |
-| WP-01 | IN_PROGRESS | Harness | 0 | Running memory probe and tool verification |
+| WP-01 | DONE | Harness | 0 | Memory footprint probe completed and verified PASS |
 | WP-10 | TODO | Harness | 0 | tools/synth.py: analytic trajectories |
 | WP-11 | TODO | Harness | 0 | tools/degrade.py + config |
 | WP-12 | TODO | Harness | 0 | tools/validate_trajectory.py |
