@@ -24,3 +24,9 @@ Append-only log of non-obvious engineering decisions, assumptions, and tool find
 - **Robustness Check**:
   - `data/tumvi/room1/mav0/imu0/data.csv`: 30,943 rows, 199.37 Hz, 0 NaN/Inf, 0 gaps, mean accel norm 10.044 m/s^2, mean gyro 1.33 rad/s.
   - `data/tumvi/room2/mav0/imu0/data.csv`: 31,614 rows, 199.40 Hz, 0 NaN/Inf, 0 gaps, mean accel norm 9.870 m/s^2, mean gyro 0.98 rad/s.
+
+## 2026-11-07: WP-28 Allowlist Scope Extension
+- **Packet**: WP-28
+- **Decision**: Widen WP-28 allowlist to include `tools/run_eval.py` alongside `src/ref/pipeline.py`, `src/ref/__main__.py`, and `results/ablation_py.md`.
+- **Rationale**: `scripts/gate_g2.sh` executes `python3 tools/run_eval.py --eval-py-ref` to run comparative evaluations of `eskf_full`, `eskf_basic`, `mahony`, and `naive` and write the ablation table to `results/ablation_py.md`.
+

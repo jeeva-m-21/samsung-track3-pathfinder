@@ -21,7 +21,7 @@ Last passed gate: G1
 | WP-25 | DONE | Estimator | 0 | Degradation monitor and quality score verified PASS, reviewed |
 | WP-26 | DONE | Estimator | 0 | Gap and dropout handler verified PASS, reviewed |
 | WP-27 | DONE | Estimator | 0 | Failure detector and blind-5s predictor verified PASS, reviewed |
-| WP-28 | TODO | Estimator | 0 | ref/pipeline.py + CLI; ablations |
+| WP-28 | IN_PROGRESS | Estimator | 0 | Implementing pipeline.py, __main__.py and ablation eval |
 | WP-30 | TODO | CppPort | 0 | C++ skeleton: stdio parser, timestamp writer, params.h |
 | WP-31 | TODO | CppPort | 0 | mat.h, quat.h fixed-size math + C++ unit tests |
 | WP-32 | TODO | CppPort | 0 | Port init, strapdown, ESKF predict |
