@@ -9,7 +9,7 @@ Last passed gate: G0
 | WP-01 | DONE | Harness | 0 | Memory footprint probe completed and verified PASS |
 | WP-10 | DONE | Harness | 0 | 5 analytic trajectories + zero-noise strapdown verified PASS |
 | WP-11 | DONE | Harness | 0 | 4 dropout encodings + noise + bias + sidecar verified PASS |
-| WP-12 | IN_PROGRESS | Harness | 0 | Implementing validate_trajectory.py and test_validate.py |
+| WP-12 | DONE | Harness | 0 | Trajectory output validator and 7 unit tests verified PASS |
 | WP-13 | TODO | Harness | 0 | tools/metrics.py: evo wrapper + segment metrics |
 | WP-14 | TODO | Harness | 0 | Baselines: naive, Mahony |
 | WP-15 | TODO | Harness | 0 | tools/run_eval.py + results table writer |
