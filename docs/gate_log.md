@@ -129,3 +129,28 @@ Scope OK for WP-23
 
 
 
+
+## Work Packet WP-24 Verification
+- Date: 2026-11-06T16:11:00+05:30
+- Commands:
+  - `bash scripts/check_scope.sh WP-24`
+  - `PATH=".venv/bin:$PATH" PYTHONPATH=. pytest tests/test_updates.py`
+  - `PATH=".venv/bin:$PATH" PYTHONPATH=. pytest -q`
+- Output:
+```
+Scope OK for WP-24
+============================== 20 passed in 0.15s ==============================
+........................................................................ [ 69%]
+................................                                         [100%]
+104 passed in 2.01s
+```
+- Mutation check: Mutated tilt innovation `y = z + h_hat` in `src/ref/updates.py`; failed `test_tilt_innovation_and_h_matrix` (exit code 1); restored and verified 20/20 passed.
+- Checklist:
+  - Tilt update converges on synth with initial 5 deg error: YES (pitch, roll, and combined roll+pitch converge to < 0.5 deg within 1.0s - 1.5s)
+  - ZUPT stationary detector correctly identifies stationary vs moving windows: YES (passes on static window, rejects on gyro motion > 0.03 rad/s, accel dev > 0.15 m/s^2, or high variance)
+  - ZUPT zeroes velocity drift: YES (reduces drift by > 99% in 2 updates, final v_norm < 0.01 m/s)
+  - Gating and quality threshold rules respected: YES (tilt gating expands with degraded quality, ZUPT disables when quality < 0.3)
+  - No magic numbers, constants from params.json, no global state, pure functions, portable to C++: YES (uses pre-allocated circular ring buffer in StationaryWindowBuffer and fixed-size arrays)
+  - Output format unchanged: YES
+  - decisions.md updated for every deviation: YES (no deviations)
+- Verdict: PASS
