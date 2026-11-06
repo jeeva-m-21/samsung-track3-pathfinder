@@ -15,7 +15,7 @@ Last passed gate: G1
 | WP-15 | DONE | Harness | 0 | tools/run_eval.py verified, Gate G1 passed and reviewed PASS |
 | WP-20 | DONE | Estimator | 0 | mathlib.py implemented, 9/9 unit tests passed, reviewed PASS |
 | WP-21 | DONE | Estimator | 0 | Streaming CSV parser + 13 tests verified PASS |
-| WP-22 | TODO | Estimator | 0 | ref/init.py + strapdown only |
+| WP-22 | IN_PROGRESS | Estimator | 0 | Implementing init.py, strapdown.py and unit tests |
 | WP-23 | TODO | Estimator | 0 | ref/eskf.py predict + Joseph update helper |
 | WP-24 | TODO | Estimator | 0 | Tilt update and ZUPT |
 | WP-25 | TODO | Estimator | 0 | Degradation monitor (quality score) |
