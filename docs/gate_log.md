@@ -181,3 +181,32 @@ Scope OK for WP-25
   - Output format unchanged: YES
   - decisions.md updated for every deviation: YES (no deviations)
 - Verdict: PASS
+
+## Work Packet WP-26 Verification
+- Date: 2026-11-06T23:59:00+05:30
+- Commands:
+  - `bash scripts/check_scope.sh WP-26`
+  - `PATH=".venv/bin:$PATH" PYTHONPATH=. pytest tests/test_gap.py`
+  - `PATH=".venv/bin:$PATH" PYTHONPATH=. pytest -q`
+- Output:
+```
+Scope OK for WP-26
+============================== 14 passed in 0.22s ==============================
+........................................................................ [ 53%]
+..............................................................           [100%]
+134 passed in 3.14s
+```
+- Mutation check: Mutated velocity decay factor (`decay = 1.0`) in `src/ref/gap.py`; pytest failed with 3 failures (`test_gap_substep_velocity_decay_and_covariance`, `test_propagate_gap_multiple_substeps`, `test_synthetic_circle_gap_continuous_and_bounded`, exit code 1); restored and verified 14/14 passed.
+- Checklist:
+  - Invalid sample detection (NaN, all-zero, repeated stuck >= 3, out-of-range): YES (covered by 4 classification tests)
+  - dt <= 0 duplicate handling: YES (freezes state, skips updates)
+  - Missing row gaps sub-stepping with velocity decay v * exp(-dt_sub / tau_gap): YES (sub-stepping loop with tau_gap=2.0s, Q inflated by kappa_gap=5.0)
+  - Across a 2.0 s gap on synthetic data, no position jump > bound occurs (continuous smooth transition): YES (verified on synthetic circle and figure-eight trajectories)
+  - Invalid rows handled with single dt_nom gap sub-step: YES (emits 1 step, sets recover = recover_steps)
+  - Post-gap recovery counter decaying R_meas inflation over recover_steps: YES (multiplier (1 + 10 * recover / recover_steps) decaying to 1.0)
+  - Master clock int64 nanosecond subtraction used before float scaling: YES (`dt_ns = int(t_ns) - int(self.prev_t_ns); dt = float(dt_ns) * 1e-9`)
+  - No magic numbers, constants from params.json, no global state, pure functions / fixed-size ring buffer, portable to C++: YES (StateRingBuffer preallocated capacity 64, pure functions for step and classification)
+  - Output format unchanged: YES
+  - decisions.md updated for every deviation: YES (no deviations)
+- Verdict: PASS
+
