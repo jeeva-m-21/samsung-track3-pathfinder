@@ -97,5 +97,35 @@ Scope OK for WP-22
   - decisions.md updated for every deviation: YES (no deviations)
 - Verdict: PASS
 
+## Work Packet WP-23 Verification
+- Date: 2026-11-06T15:54:00+05:30
+- Commands:
+  - `bash scripts/check_scope.sh WP-23`
+  - `PATH=".venv/bin:$PATH" PYTHONPATH=. pytest tests/test_eskf.py tests/test_jacobians.py`
+  - `PATH=".venv/bin:$PATH" PYTHONPATH=. pytest -q`
+- Output:
+```
+Scope OK for WP-23
+============================== 13 passed in 0.43s ==============================
+........................................................................ [ 85%]
+............                                                             [100%]
+84 passed in 3.31s
+```
+- Mutation checks:
+  1. Mutated F position transition (`F[6:9, 3:6] = np.eye(3) * 2.0 * dt`) in `src/ref/eskf.py`; failed 3 tests in `tests/test_jacobians.py` (`test_analytical_f_structure`, `test_f_against_finite_differences_small_dt`, `test_f_against_finite_differences_nominal_dt`); restored and verified clean.
+  2. Mutated discrete Q calculation (`q_theta = (sigma_g * sigma_g) * 2.0 * dt`) in `src/ref/eskf.py`; failed `test_discrete_q_construction` in `tests/test_eskf.py`; restored and verified clean.
+- Checklist:
+  - Tests exist for all items under "Tests first": YES (9 in test_eskf.py, 4 in test_jacobians.py)
+  - Numerical Jacobian verification matches finite differences to O(dt^2): YES (max diff < 1e-6 at dt=1e-4s; all blocks match at dt=0.005s)
+  - P remains symmetric positive-definite after 10,000 steps: YES (asym < 1e-12, all eigvals > 0, Cholesky passes)
+  - Discrete Q matches SPEC §12.4: YES (15x15 block diagonal with kappa factor)
+  - Generic Joseph update helper implemented and preserves positive definiteness: YES (closed form 3x3 inversion with det floor, D P D congruence scaling on cap)
+  - State injection into (q, v, p, b_g, b_a) and error state reset: YES (unit quaternion renormalization, sign continuity, G matrix reset)
+  - No magic numbers; constants come from configs/params.json: YES
+  - No forbidden constructs (no global state, no dicts inside filter loops, fixed-size math): YES
+  - Output format unchanged: YES
+  - decisions.md updated for every deviation: YES (no deviations)
+- Verdict: PASS
+
 
 
