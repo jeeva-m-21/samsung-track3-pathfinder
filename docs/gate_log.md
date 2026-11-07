@@ -376,3 +376,30 @@ ALL TESTS PASSED under ASan/UBSan
   - Output format unchanged: YES
   - decisions.md updated for every deviation: YES (no deviations)
 - Verdict: PASS
+
+## Work Packet WP-33 Verification
+- Date: 2026-11-07T10:30:00+05:30
+- Commands:
+  - `bash scripts/check_scope.sh WP-33`
+  - `make -C src/cpp test`
+  - `make -C src/cpp clean && CXXFLAGS="-fsanitize=address,undefined -g" make -C src/cpp test`
+  - `PATH=".venv/bin:$PATH" PYTHONPATH=. pytest -q`
+- Output:
+```
+Scope OK for WP-33
+=== Summary: 457 checks run, 0 failures ===
+ALL MATH TESTS PASSED.
+Test results: 472 run, 0 failed
+Running WP-33 module unit tests...
+Tests run: 304, Tests failed: 0
+ALL MODULE TESTS PASSED!
+151 passed in 3.05s
+```
+- Mutation check: Mutated `predict_blind_position` decay factor scaling `0.5 * shrink_v * tau_v_val * decay_factor` in `src/cpp/blind.cpp`; `make -C src/cpp test` failed with 3 assertion failures in test_modules (exit code 2); reverted completely and verified all 304 module unit tests + 472 eskf tests + 457 math tests passed cleanly.
+- Checklist:
+  - Tests exist for every item under "Tests first" and fail when code is broken: YES (304 module checks in test_modules.cpp covering tilt update, ZUPT, stationary buffer, degradation monitor, gap classifier, gap substepping/decay, blind extrapolation, and failure detector rollback)
+  - No magic numbers; constants come from configs/params.json (src/cpp/params.h): YES
+  - No forbidden constructs (zero `<iostream>`, zero dynamic heap allocations, fixed-size math): YES (grep verified 0 instances of iostream and heap allocation; clean execution under ASan/UBSan)
+  - Output format unchanged: YES
+  - decisions.md updated for every deviation: YES (no deviations)
+- Verdict: PASS
