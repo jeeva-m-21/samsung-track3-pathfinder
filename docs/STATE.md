@@ -31,6 +31,6 @@ Last passed gate: G4
 | WP-40 | DONE | QA | 0 | Adversarial fuzz generator + runner verified PASS (57 tests) |
 | WP-41 | DONE | QA | 0 | ASan/UBSan sanitizer hardening verified PASS |
 | WP-42 | DONE | QA | 0 | Budget regression, determinism, and Gate G4 verified PASS |
-| WP-50 | IN_PROGRESS | Tuner | 0 | tools/tune.py (Optuna, CV by sequence) + export |
+| WP-50 | REVIEW | Tuner | 0 | Optuna tuning + export complete, Gate G5 verified PASS |
 | WP-51 | TODO | Tuner | 0 | Final ablation table, plots |
 | WP-90 | TODO | Reviewer | 0 | Review of any packet in REVIEW |
