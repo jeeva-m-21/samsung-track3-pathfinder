@@ -32,5 +32,5 @@ Last passed gate: G5
 | WP-41 | DONE | QA | 0 | ASan/UBSan sanitizer hardening verified PASS |
 | WP-42 | DONE | QA | 0 | Budget regression, determinism, and Gate G4 verified PASS |
 | WP-50 | DONE | Tuner | 0 | Optuna tuning + export complete, Gate G5 verified PASS |
-| WP-51 | TODO | Tuner | 0 | Final ablation table, plots |
+| WP-51 | IN_PROGRESS | Tuner | 0 | Final ablation table, plots |
 | WP-90 | TODO | Reviewer | 0 | Review of any packet in REVIEW |
