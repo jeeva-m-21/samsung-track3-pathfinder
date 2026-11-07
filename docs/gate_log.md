@@ -403,3 +403,45 @@ ALL MODULE TESTS PASSED!
   - Output format unchanged: YES
   - decisions.md updated for every deviation: YES (no deviations)
 - Verdict: PASS
+
+## Gate G3 & Work Packet WP-34 Verification
+- Date: 2026-11-07T10:50:00+05:30
+- Commands:
+  - `bash scripts/check_scope.sh WP-34`
+  - `PATH=".venv/bin:$PATH" PYTHONPATH=. bash scripts/gate_g3.sh`
+  - `make -C src/cpp clean && CXXFLAGS="-fsanitize=address,undefined -g" make -C src/cpp test`
+  - `PATH=".venv/bin:$PATH" PYTHONPATH=. pytest -q`
+- Output:
+```
+Scope OK for WP-34
+=== Running Gate G3 Checks ===
+=== Running Differential Verification (40 test cases) ===
+  Testing circle [naive]... PASS (rows=2000, pos_diff=0.00e+00 m, quat_diff=0.00e+00)
+  Testing circle [mahony]... PASS (rows=2000, pos_diff=0.00e+00 m, quat_diff=0.00e+00)
+  Testing circle [eskf_basic]... PASS (rows=2000, pos_diff=0.00e+00 m, quat_diff=0.00e+00)
+  Testing circle [eskf_basic+blind]... PASS (rows=3000, pos_diff=0.00e+00 m, quat_diff=0.00e+00)
+  Testing circle [eskf_full]... PASS (rows=2000, pos_diff=0.00e+00 m, quat_diff=0.00e+00)
+  Testing circle [eskf_full+blind]... PASS (rows=3000, pos_diff=0.00e+00 m, quat_diff=0.00e+00)
+  ...
+  Testing figure_eight_degraded [eskf_full+blind]... PASS (rows=2600, pos_diff=0.00e+00 m, quat_diff=0.00e+00)
+ALL 40 DIFFERENTIAL TESTS PASSED.
+peak_rss_kb=2452 cpu_ms_per_s=0.0 duration_s=9.995000000
+VALID: Trajectory matches specification.
+BUDGET OK
+ALL MATH TESTS PASSED. (457 checks)
+ALL ESKF TESTS PASSED. (472 checks)
+ALL MODULE TESTS PASSED. (304 checks)
+GATE G3 PASS
+151 passed in 2.41s
+```
+- Mutation check: Mutated position propagation in `src/cpp/pipeline.cpp` (`state.p.data[0] += 0.1;`); `python3 scripts/diff_py_cpp.py` immediately detected discrepancy on all 11 `eskf_full` test cases and exited 1; reverted mutation and confirmed all 40 differential tests passed cleanly.
+- Checklist:
+  - Tests exist for every item under "Tests first" and fail when code is broken: YES (40 differential test cases covering all 4 ablation modes + blind across synthetic and degraded trajectories; caught by mutation test)
+  - No magic numbers; constants come from configs/params.json (generated params.h): YES
+  - No forbidden constructs (zero `<iostream>`, zero dynamic heap allocations in filter loop, fixed-size math): YES (grep verified 0 instances of iostream and heap allocation; clean execution under ASan/UBSan)
+  - Output format unchanged: YES (frozen 8-column format verified by tools/validate_trajectory.py)
+  - Memory budget satisfied: YES (peak RSS 2452 KB <= 4096 KB limit)
+  - Latency budget satisfied: YES (CPU time < 0.01s / 10s data = 0.0 ms/s <= 2.0 ms/s limit)
+  - Determinism satisfied: YES (bit-identical across multiple runs)
+  - decisions.md updated for every deviation: YES (no deviations)
+- Verdict: PASS

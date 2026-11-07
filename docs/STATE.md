@@ -1,7 +1,7 @@
 # STATE
-Updated: 2026-11-07T10:17:00+05:30 by Reviewer
-Current phase: P3
-Last passed gate: G2
+Updated: 2026-11-07T10:50:00+05:30 by Reviewer
+Current phase: P4
+Last passed gate: G3
 
 | WP | Status | Owner | Attempts | Last note |
 |---|---|---|---|---|
@@ -26,8 +26,8 @@ Last passed gate: G2
 | WP-31 | DONE | CppPort | 0 | mat.h, quat.h fixed-size math + C++ unit tests verified PASS |
 | WP-32 | DONE | CppPort | 0 | Init, strapdown, ESKF predict verified PASS |
 | WP-33 | DONE | CppPort | 0 | Updates, monitor, gap handler, blind predictor verified PASS |
-| WP-34 | REVIEW | CppPort | 0 | Full pipeline, ablations, diff parity, Gate G3 verified PASS |
-| WP-35 | TODO | CppPort | 0 | Performance pass if budgets missed |
+| WP-34 | DONE | CppPort | 0 | Full pipeline, ablations, diff parity, Gate G3 verified PASS |
+| WP-35 | DONE | CppPort | 0 | Performance pass satisfied (RSS 2.4MB <= 4MB, latency 0.0ms/s <= 2.0ms/s) |
 | WP-40 | TODO | QA | 0 | Fuzz inputs generator + runner |
 | WP-41 | TODO | QA | 0 | ASan/UBSan build and run |
 | WP-42 | TODO | QA | 0 | Budget regression + determinism script |
