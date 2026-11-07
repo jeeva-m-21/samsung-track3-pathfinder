@@ -1,11 +1,17 @@
-# Data & Build Artifacts
+# Data & Datasets
 data/
+*.bag
+*.tar.gz
+
+# Build & Binaries
 build/
+bin/
 *.o
 *.so
 *.a
 main
 src/main
+src/build/
 src/cpp/build/
 *.zip
 
@@ -13,5 +19,12 @@ src/cpp/build/
 __pycache__/
 *.pyc
 .venv/
-requirements.txt
-results/tmp/
+.pytest_cache/
+
+# Internal Agent & Review Work
+.agent/
+review/
+scratch/
+docs/
+results/
+*.log
