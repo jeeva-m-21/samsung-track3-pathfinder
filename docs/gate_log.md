@@ -240,3 +240,50 @@ Scope OK for WP-27
   - decisions.md updated for every deviation: YES (no deviations)
 - Verdict: PASS
 
+
+## Gate G2 & Work Packet WP-28 Verification
+- Date: 2026-11-07T00:35:00+05:30
+- Commands:
+  - `bash scripts/check_scope.sh WP-28`
+  - `PATH=".venv/bin:$PATH" PYTHONPATH=. bash scripts/gate_g2.sh`
+  - `PATH=".venv/bin:$PATH" PYTHONPATH=. pytest -q`
+- Output:
+```
+Scope OK for WP-28
+=== Running Gate G2 Checks ===
+============================= 151 passed in 2.39s ==============================
+=== Running Python Reference Pipeline Ablation Evaluation (Gate G2) ===
+
+Evaluating sequence: circle_degraded...
+  [PASS] eskf_full beats naive baseline on circle_degraded (ATE: 4.9822 vs 31.2347, Blind-5s: 7.1299 vs 85.1790)
+
+Evaluating sequence: figure_eight_degraded...
+  [PASS] eskf_full beats naive baseline on figure_eight_degraded (ATE: 2.1776 vs 19.9201, Blind-5s: 4.4063 vs 49.9989)
+
+# Python Reference Pipeline Ablation Results (Gate G2)
+## Overall Summary (Mean Across Sequences)
+| Sequence | Ablation   | ATE (m) | Blind-5s (m) | Dropout (m) | RPE 1s (m) | Start-Anchored (m) | Rot Err (°) | Objective J |
+| -------- | ---------- | ------- | ------------ | ----------- | ---------- | ------------------ | ----------- | ----------- |
+| MEAN     | naive      | 25.5774 | 67.5890      | 48.8069     | 7.7123     | -                  | -           | 1.0000      |
+| MEAN     | mahony     | 10.5683 | 28.9769      | 20.6768     | 4.4552     | -                  | -           | 0.3893      |
+| MEAN     | eskf_basic | 4.7144  | 8.5085       | 7.6157      | 2.4007     | -                  | -           | 0.1989      |
+| MEAN     | eskf_full  | 3.5799  | 5.7681       | 6.8960      | 1.7464     | -                  | -           | 0.1384      |
+
+Gate G2 Acceptance Verification:
+- All output trajectories passed trajectory validation (tools/validate_trajectory.py): PASS
+- eskf_full beats naive baseline on ATE on all held-out sequences: PASS
+- eskf_full beats naive baseline on Blind-5s RMSE on all held-out sequences: PASS
+- Mean scalar objective J: eskf_full (0.1384) vs naive (1.0000)
+Results table successfully saved to results/ablation_py.md
+GATE G2 PASS
+```
+- Mutation check: Mutated strapdown acceleration in `src/ref/pipeline.py` (`state = strapdown_step(state, w_smp, a_smp * 0.0, dt, g_w)`); Gate G2 failed with `AssertionError: Gate G2 check failed on figure_eight_degraded: eskf_full blind-5s (60.8291) >= naive (49.9989)` (exit code 1); restored and verified Gate G2 passed cleanly.
+- Checklist:
+  - Tests exist for all items under "Tests first": YES (Gate G2 acceptance across synthetic benchmark sequences + 151 unit/integration tests)
+  - All output trajectories pass trajectory validator: YES
+  - eskf_full beats naive baseline on ATE and Blind-5s across all sequences: YES
+  - No magic numbers; constants come from configs/params.json: YES
+  - No forbidden constructs (no global state, no dicts inside filter loops, fixed-size math): YES
+  - Output format unchanged: YES (frozen 8-column format)
+  - decisions.md updated for every deviation: YES
+- Verdict: PASS
