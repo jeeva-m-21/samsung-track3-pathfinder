@@ -42,9 +42,15 @@
   "recover_steps": 206,
   "T_fail": 1.0,
   "smooth_omega_tau": 0.25,
-  "ring_buffer_size": 64,
+  "ring_buffer_size": 256,
   "tau_v": 6.813634740992689,
   "tau_omega": 1.5366218824583369,
   "shrink_v": 0.9874064157466331,
-  "stationary_v_thresh": 0.05
+  "stationary_v_thresh": 0.05,
+  "enable_iir_filter": true,
+  "iir_cutoff_hz": 14.0,
+  "enable_velocity_bounding": true,
+  "max_velocity_mps": 3.0,
+  "velocity_bounding_sigma": 0.2,
+  "delayed_output_frames": 512
 }

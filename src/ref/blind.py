@@ -263,7 +263,7 @@ class ReliableRingBuffer:
     Capacity defaults to 64 snapshots.
     """
 
-    def __init__(self, capacity: int = 64):
+    def __init__(self, capacity: int = 256):
         self.capacity = max(1, int(capacity))
         self._t_ns = np.zeros(self.capacity, dtype=np.int64)
         self._p = np.zeros((self.capacity, 3), dtype=np.float64)
@@ -359,22 +359,51 @@ def rollback_to_reliable(
         head = ring_buffer._head
         count = ring_buffer._count
 
-        # Scan newest to oldest
+        latest_idx = None
         for i in range(count):
             idx = (head - 1 - i + cap) % cap
             if ring_buffer._t_ns[idx] < t_onset_ns:
-                return ReliableSnapshot(
-                    t_ns=int(ring_buffer._t_ns[idx]),
-                    p=ring_buffer._p[idx].copy(),
-                    v=ring_buffer._v[idx].copy(),
-                    q=ring_buffer._q[idx].copy(),
-                    omega_s=ring_buffer._omega_s[idx].copy(),
-                )
+                latest_idx = idx
+                break
 
-        # Fallback to oldest entry
-        oldest = ring_buffer.get_oldest()
-        assert oldest is not None
-        return oldest
+        if latest_idx is None:
+            oldest = ring_buffer.get_oldest()
+            assert oldest is not None
+            return oldest
+
+        t_latest = int(ring_buffer._t_ns[latest_idx])
+        p_latest = ring_buffer._p[latest_idx].copy()
+        q_latest = ring_buffer._q[latest_idx].copy()
+
+        # Improvement 3: 1.0s window averaging of v and omega_s
+        window_ns = 1_000_000_000
+        t_min_ns = t_latest - window_ns
+
+        sum_v = np.zeros(3, dtype=np.float64)
+        sum_w = np.zeros(3, dtype=np.float64)
+        n_samples = 0
+
+        for i in range(count):
+            idx = (head - 1 - i + cap) % cap
+            t_smp = int(ring_buffer._t_ns[idx])
+            if t_smp > t_latest:
+                continue
+            if t_smp < t_min_ns:
+                break
+            sum_v += ring_buffer._v[idx]
+            sum_w += ring_buffer._omega_s[idx]
+            n_samples += 1
+
+        v_avg = (sum_v / n_samples) if n_samples > 0 else ring_buffer._v[latest_idx].copy()
+        w_avg = (sum_w / n_samples) if n_samples > 0 else ring_buffer._omega_s[latest_idx].copy()
+
+        return ReliableSnapshot(
+            t_ns=t_latest,
+            p=p_latest,
+            v=v_avg,
+            q=q_latest,
+            omega_s=w_avg,
+        )
 
     # 2. StateRingBuffer (from src.ref.gap) compatibility
     cap = getattr(ring_buffer, "capacity", len(ring_buffer))
@@ -384,36 +413,68 @@ def rollback_to_reliable(
     states = getattr(ring_buffer, "_states", [])
     omegas = getattr(ring_buffer, "_omega_s", [])
 
+    latest_idx = None
     for i in range(count):
         idx = (head - 1 - i + cap) % cap
         if t_list[idx] < t_onset_ns:
-            st = states[idx]
-            w = omegas[idx]
-            return ReliableSnapshot(
-                t_ns=int(t_list[idx]),
-                p=st.p.copy(),
-                v=st.v.copy(),
-                q=st.q.copy(),
-                omega_s=w.copy() if w is not None else np.zeros(3, dtype=np.float64),
-            )
+            latest_idx = idx
+            break
 
-    oldest = ring_buffer.get_oldest()
-    if oldest is not None:
-        t_ns_old, st_old, _, w_old = oldest
+    if latest_idx is None:
+        oldest = ring_buffer.get_oldest()
+        if oldest is not None:
+            t_ns_old, st_old, _, w_old = oldest
+            return ReliableSnapshot(
+                t_ns=int(t_ns_old),
+                p=st_old.p.copy(),
+                v=st_old.v.copy(),
+                q=st_old.q.copy(),
+                omega_s=w_old.copy() if w_old is not None else np.zeros(3, dtype=np.float64),
+            )
         return ReliableSnapshot(
-            t_ns=int(t_ns_old),
-            p=st_old.p.copy(),
-            v=st_old.v.copy(),
-            q=st_old.q.copy(),
-            omega_s=w_old.copy() if w_old is not None else np.zeros(3, dtype=np.float64),
+            t_ns=int(t_onset_ns),
+            p=np.zeros(3, dtype=np.float64),
+            v=np.zeros(3, dtype=np.float64),
+            q=np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float64),
+            omega_s=np.zeros(3, dtype=np.float64),
         )
 
+    st_latest = states[latest_idx]
+    t_latest = int(t_list[latest_idx])
+    p_latest = st_latest.p.copy()
+    q_latest = st_latest.q.copy()
+
+    window_ns = 1_000_000_000
+    t_min_ns = t_latest - window_ns
+
+    sum_v = np.zeros(3, dtype=np.float64)
+    sum_w = np.zeros(3, dtype=np.float64)
+    n_samples = 0
+
+    for i in range(count):
+        idx = (head - 1 - i + cap) % cap
+        t_smp = int(t_list[idx])
+        if t_smp > t_latest:
+            continue
+        if t_smp < t_min_ns:
+            break
+        sum_v += states[idx].v
+        w = omegas[idx]
+        if w is not None:
+            sum_w += w
+        n_samples += 1
+
+    v_avg = (sum_v / n_samples) if n_samples > 0 else st_latest.v.copy()
+    w_latest = omegas[latest_idx]
+    w_default = w_latest.copy() if w_latest is not None else np.zeros(3, dtype=np.float64)
+    w_avg = (sum_w / n_samples) if n_samples > 0 else w_default
+
     return ReliableSnapshot(
-        t_ns=int(t_onset_ns),
-        p=np.zeros(3, dtype=np.float64),
-        v=np.zeros(3, dtype=np.float64),
-        q=np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float64),
-        omega_s=np.zeros(3, dtype=np.float64),
+        t_ns=t_latest,
+        p=p_latest,
+        v=v_avg,
+        q=q_latest,
+        omega_s=w_avg,
     )
 
 

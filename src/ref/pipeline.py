@@ -47,7 +47,9 @@ from src.ref.eskf import (
 )
 from src.ref.monitor import DegradationMonitor
 from src.ref.updates import (
+    Butterworth2LowPass,
     StationaryWindowBuffer,
+    apply_velocity_bounding,
     tilt_update,
     zupt_step,
 )
@@ -57,6 +59,75 @@ from src.ref.gap import (
 )
 from src.ref.blind import BlindPredictor
 from src.ref.parser import parse_imu_stream
+
+
+class DelayedOutputBuffer:
+    """Ring buffer holding delayed output frames to apply smooth kinematic bridge across gaps."""
+
+    def __init__(self, capacity: int = 512, delay_frames: int = 512):
+        self.capacity = int(capacity)
+        self.delay_frames = int(delay_frames)
+        self.buffer = []
+
+    def push(self, t_ns: int, p: np.ndarray, q: np.ndarray, is_gap: bool, f_out) -> None:
+        if self.delay_frames <= 0:
+            sec = t_ns // 1_000_000_000
+            nsec = t_ns % 1_000_000_000
+            f_out.write(
+                f"{sec}.{nsec:09d} {p[0]:.9f} {p[1]:.9f} {p[2]:.9f} "
+                f"{q[1]:.9f} {q[2]:.9f} {q[3]:.9f} {q[0]:.9f}\n"
+            )
+            return
+
+        if len(self.buffer) >= self.delay_frames or len(self.buffer) >= self.capacity:
+            oldest = self.buffer.pop(0)
+            sec = oldest['t_ns'] // 1_000_000_000
+            nsec = oldest['t_ns'] % 1_000_000_000
+            po = oldest['p']
+            qo = oldest['q']
+            f_out.write(
+                f"{sec}.{nsec:09d} {po[0]:.9f} {po[1]:.9f} {po[2]:.9f} "
+                f"{qo[1]:.9f} {qo[2]:.9f} {qo[3]:.9f} {qo[0]:.9f}\n"
+            )
+
+        self.buffer.append({'t_ns': t_ns, 'p': p.copy(), 'q': q.copy(), 'is_gap': is_gap})
+
+    def apply_bridge(self, p_recovered: np.ndarray) -> None:
+        if not self.buffer or self.delay_frames <= 0:
+            return
+
+        gap_count = 0
+        for item in reversed(self.buffer):
+            if item['is_gap']:
+                gap_count += 1
+            else:
+                break
+
+        if gap_count == 0:
+            return
+
+        last_gap_p = self.buffer[-1]['p']
+        delta_p = p_recovered - last_gap_p
+
+        start_idx = len(self.buffer) - gap_count
+        for step in range(gap_count):
+            idx = start_idx + step
+            alpha = float(step + 1) / float(gap_count + 1)
+            s = 3.0 * alpha * alpha - 2.0 * alpha * alpha * alpha
+            self.buffer[idx]['p'] = self.buffer[idx]['p'] + delta_p * s
+            self.buffer[idx]['is_gap'] = False
+
+    def flush(self, f_out) -> None:
+        while self.buffer:
+            oldest = self.buffer.pop(0)
+            sec = oldest['t_ns'] // 1_000_000_000
+            nsec = oldest['t_ns'] % 1_000_000_000
+            po = oldest['p']
+            qo = oldest['q']
+            f_out.write(
+                f"{sec}.{nsec:09d} {po[0]:.9f} {po[1]:.9f} {po[2]:.9f} "
+                f"{qo[1]:.9f} {qo[2]:.9f} {qo[3]:.9f} {qo[0]:.9f}\n"
+            )
 
 
 def _fallback_initialization(
@@ -121,7 +192,13 @@ def run_eskf_full(
     gap_handler = GapHandler(params=cfg)
     monitor = DegradationMonitor(params=cfg)
     blind_predictor = BlindPredictor(params=cfg)
-    stat_buf = StationaryWindowBuffer(capacity=int(cfg.get("ring_buffer_size", 64)))
+    stat_buf = StationaryWindowBuffer(capacity=int(cfg.get("ring_buffer_size", 256)))
+    tilt_filter = Butterworth2LowPass()
+    delay_buf = DelayedOutputBuffer(
+        capacity=512,
+        delay_frames=int(cfg.get("delayed_output_frames", 512))
+    )
+    was_in_gap = False
 
     # Preallocated initial buffer for zero dynamic allocations during startup
     max_init_cap = OnlineInitializer.MAX_BUFFER_SAMPLES
@@ -144,6 +221,77 @@ def run_eskf_full(
     with open(out_path, "w", encoding="utf-8") as f_out:
         f_out.write("# timestamp tx ty tz qx qy qz qw\n")
 
+        def process_full_step(t_curr: int, omega_curr: np.ndarray, acc_curr: np.ndarray) -> None:
+            nonlocal state, P, prev_t_ns, was_in_gap
+            assert state is not None and P is not None and g_w is not None
+
+            if blind_predictor.is_failed:
+                p_blind, q_blind = blind_predictor.predict(t_curr)
+                delay_buf.push(t_curr, p_blind, q_blind, False, f_out)
+                prev_t_ns = t_curr
+                return
+
+            step_res = gap_handler.process_sample(t_curr, omega_curr, acc_curr, state, P)
+
+            if step_res.case == GapCase.ZERO_OR_NEGATIVE_DT:
+                delay_buf.push(t_curr, state.p, state.q, False, f_out)
+                return
+
+            if step_res.case in (GapCase.GAP, GapCase.INVALID_SAMPLE):
+                state = step_res.state
+                P = step_res.P
+                was_in_gap = True
+                failed = blind_predictor.update(t_curr, is_valid=False)
+                if failed or blind_predictor.is_failed:
+                    p_out, q_out = blind_predictor.predict(t_curr)
+                else:
+                    p_out, q_out = state.p, state.q
+
+                delay_buf.push(t_curr, p_out, q_out, True, f_out)
+                prev_t_ns = t_curr
+                return
+
+            # Normal step
+            dt = (t_curr - prev_t_ns) * 1e-9
+            prev_t_ns = t_curr
+
+            state = strapdown_step(state, omega_curr, acc_curr, dt, g_w)
+            F = build_f_matrix(state, omega_curr, acc_curr, dt)
+            Q = build_q_discrete(dt, cfg, kappa=monitor.kappa)
+            P = eskf_predict_covariance(P, F, Q, diag_floor=cov_floor, diag_cap=cov_cap)
+
+            t_sec = (t_curr - t0_ns) * 1e-9
+            acc_filt = tilt_filter.step(acc_curr) if cfg.get("enable_iir_filter", True) else acc_curr
+
+            stat_buf.add_sample(t_sec, omega_curr, acc_filt)
+            is_stat = stat_buf.is_stationary(g_mag=g_mag, quality=monitor.quality, params=cfg)
+            gyro_win, acc_win = stat_buf.get_window_samples(zupt_window_s)
+            omega_stat_mean = np.mean(gyro_win, axis=0) if (is_stat and len(gyro_win) > 0) else None
+            monitor.step(t_sec, omega_curr, acc_curr, is_stationary=is_stat, omega_static_mean=omega_stat_mean)
+
+            if step_res.apply_updates:
+                state, P, _, _ = tilt_update(
+                    state, P, acc_filt, omega_curr,
+                    g_mag=g_mag, quality=monitor.quality,
+                    params=cfg, r_scale=step_res.r_scale,
+                )
+                if is_stat:
+                    state, P, _, _ = zupt_step(
+                        state, P, gyro_win, acc_win,
+                        g_mag=g_mag, quality=monitor.quality,
+                        params=cfg, r_scale=step_res.r_scale,
+                    )
+                state, P, _ = apply_velocity_bounding(state, P, params=cfg)
+
+            if was_in_gap:
+                delay_buf.apply_bridge(state.p)
+                was_in_gap = False
+
+            blind_predictor.update(
+                t_curr, is_valid=True, state=state, omega_s=gap_handler.omega_s
+            )
+            delay_buf.push(t_curr, state.p, state.q, False, f_out)
+
         with parse_imu_stream(csv_path, params=cfg) as stream:
             for t_curr, omega_curr, acc_curr, is_valid_curr, _ in stream:
                 if not is_initialized:
@@ -165,209 +313,30 @@ def run_eskf_full(
                         g_mag = float(init_res.g_mag)
                         t0_ns = int(init_res.t0)
 
+                        valid_acc = init_acc[:init_count][init_valid[:init_count]]
+                        a_mean = np.mean(valid_acc, axis=0) if len(valid_acc) > 0 else np.array([0.0, 0.0, 9.80665], dtype=np.float64)
+                        tilt_filter.reset(a_mean)
+
                         # Process buffered samples 0 .. init_count - 1
                         for idx in range(init_count):
                             t_smp = int(init_t[idx])
                             w_smp = init_omega[idx]
                             a_smp = init_acc[idx]
-                            v_smp = bool(init_valid[idx])
 
                             if idx == 0:
                                 prev_t_ns = t_smp
                                 blind_predictor.record_reliable_state(
                                     t_smp, state=state, omega_s=np.zeros(3, dtype=np.float64)
                                 )
-                                gap_handler.prev_t_ns = t_smp
-                                gap_handler.prev_sample_6 = np.concatenate([w_smp, a_smp])
-                                gap_handler.repeat_count = 1
-
-                                # Format sample 0 pose
-                                sec = t_smp // 1_000_000_000
-                                nsec = t_smp % 1_000_000_000
-                                p_s = state.p
-                                q_s = state.q
-                                f_out.write(
-                                    f"{sec}.{nsec:09d} {p_s[0]:.9f} {p_s[1]:.9f} {p_s[2]:.9f} "
-                                    f"{q_s[1]:.9f} {q_s[2]:.9f} {q_s[3]:.9f} {q_s[0]:.9f}\n"
-                                )
+                                gap_handler.process_sample(t_smp, w_smp, a_smp, state, P)
+                                delay_buf.push(t_smp, state.p, state.q, False, f_out)
                                 continue
 
-                            # Sample idx >= 1
-                            if blind_predictor.is_failed:
-                                p_blind, q_blind = blind_predictor.predict(t_smp)
-                                sec = t_smp // 1_000_000_000
-                                nsec = t_smp % 1_000_000_000
-                                f_out.write(
-                                    f"{sec}.{nsec:09d} {p_blind[0]:.9f} {p_blind[1]:.9f} {p_blind[2]:.9f} "
-                                    f"{q_blind[1]:.9f} {q_blind[2]:.9f} {q_blind[3]:.9f} {q_blind[0]:.9f}\n"
-                                )
-                                prev_t_ns = t_smp
-                                continue
-
-                            step_res = gap_handler.process_sample(t_smp, w_smp, a_smp, state, P)
-
-                            if step_res.case == GapCase.ZERO_OR_NEGATIVE_DT:
-                                sec = t_smp // 1_000_000_000
-                                nsec = t_smp % 1_000_000_000
-                                p_s = state.p
-                                q_s = state.q
-                                f_out.write(
-                                    f"{sec}.{nsec:09d} {p_s[0]:.9f} {p_s[1]:.9f} {p_s[2]:.9f} "
-                                    f"{q_s[1]:.9f} {q_s[2]:.9f} {q_s[3]:.9f} {q_s[0]:.9f}\n"
-                                )
-                                continue
-
-                            if step_res.case in (GapCase.GAP, GapCase.INVALID_SAMPLE):
-                                state = step_res.state
-                                P = step_res.P
-                                failed = blind_predictor.update(t_smp, is_valid=False)
-                                if failed or blind_predictor.is_failed:
-                                    p_out, q_out = blind_predictor.predict(t_smp)
-                                else:
-                                    p_out, q_out = state.p, state.q
-
-                                sec = t_smp // 1_000_000_000
-                                nsec = t_smp % 1_000_000_000
-                                f_out.write(
-                                    f"{sec}.{nsec:09d} {p_out[0]:.9f} {p_out[1]:.9f} {p_out[2]:.9f} "
-                                    f"{q_out[1]:.9f} {q_out[2]:.9f} {q_out[3]:.9f} {q_out[0]:.9f}\n"
-                                )
-                                prev_t_ns = t_smp
-                                continue
-
-                            # Normal step
-                            dt = (t_smp - prev_t_ns) * 1e-9
-                            prev_t_ns = t_smp
-
-                            state = strapdown_step(state, w_smp, a_smp, dt, g_w)
-                            F = build_f_matrix(state, w_smp, a_smp, dt)
-                            Q = build_q_discrete(dt, cfg, kappa=monitor.kappa)
-                            P = eskf_predict_covariance(P, F, Q, diag_floor=cov_floor, diag_cap=cov_cap)
-
-                            t_sec = (t_smp - t0_ns) * 1e-9
-                            stat_buf.add_sample(t_sec, w_smp, a_smp)
-                            is_stat = stat_buf.is_stationary(g_mag=g_mag, quality=monitor.quality, params=cfg)
-                            gyro_win, acc_win = stat_buf.get_window_samples(zupt_window_s)
-                            omega_stat_mean = np.mean(gyro_win, axis=0) if (is_stat and len(gyro_win) > 0) else None
-                            monitor.step(t_sec, w_smp, a_smp, is_stationary=is_stat, omega_static_mean=omega_stat_mean)
-
-                            if step_res.apply_updates:
-                                state, P, _, _ = tilt_update(
-                                    state, P, a_smp, w_smp,
-                                    g_mag=g_mag, quality=monitor.quality,
-                                    params=cfg, r_scale=step_res.r_scale,
-                                )
-                                if is_stat:
-                                    state, P, _, _ = zupt_step(
-                                        state, P, gyro_win, acc_win,
-                                        g_mag=g_mag, quality=monitor.quality,
-                                        params=cfg, r_scale=step_res.r_scale,
-                                    )
-
-                            blind_predictor.update(
-                                t_smp, is_valid=True, state=state, omega_s=gap_handler.omega_s
-                            )
-
-                            sec = t_smp // 1_000_000_000
-                            nsec = t_smp % 1_000_000_000
-                            p_s = state.p
-                            q_s = state.q
-                            f_out.write(
-                                f"{sec}.{nsec:09d} {p_s[0]:.9f} {p_s[1]:.9f} {p_s[2]:.9f} "
-                                f"{q_s[1]:.9f} {q_s[2]:.9f} {q_s[3]:.9f} {q_s[0]:.9f}\n"
-                            )
-
+                            process_full_step(t_smp, w_smp, a_smp)
                         continue
-
-                    # Still accumulating initial samples
                     continue
 
-                # Stream samples once initialized
-                assert state is not None and P is not None and g_w is not None
-
-                if blind_predictor.is_failed:
-                    p_blind, q_blind = blind_predictor.predict(t_curr)
-                    sec = t_curr // 1_000_000_000
-                    nsec = t_curr % 1_000_000_000
-                    f_out.write(
-                        f"{sec}.{nsec:09d} {p_blind[0]:.9f} {p_blind[1]:.9f} {p_blind[2]:.9f} "
-                        f"{q_blind[1]:.9f} {q_blind[2]:.9f} {q_blind[3]:.9f} {q_blind[0]:.9f}\n"
-                    )
-                    prev_t_ns = t_curr
-                    continue
-
-                step_res = gap_handler.process_sample(t_curr, omega_curr, acc_curr, state, P)
-
-                if step_res.case == GapCase.ZERO_OR_NEGATIVE_DT:
-                    sec = t_curr // 1_000_000_000
-                    nsec = t_curr % 1_000_000_000
-                    p_s = state.p
-                    q_s = state.q
-                    f_out.write(
-                        f"{sec}.{nsec:09d} {p_s[0]:.9f} {p_s[1]:.9f} {p_s[2]:.9f} "
-                        f"{q_s[1]:.9f} {q_s[2]:.9f} {q_s[3]:.9f} {q_s[0]:.9f}\n"
-                    )
-                    continue
-
-                if step_res.case in (GapCase.GAP, GapCase.INVALID_SAMPLE):
-                    state = step_res.state
-                    P = step_res.P
-                    failed = blind_predictor.update(t_curr, is_valid=False)
-                    if failed or blind_predictor.is_failed:
-                        p_out, q_out = blind_predictor.predict(t_curr)
-                    else:
-                        p_out, q_out = state.p, state.q
-
-                    sec = t_curr // 1_000_000_000
-                    nsec = t_curr % 1_000_000_000
-                    f_out.write(
-                        f"{sec}.{nsec:09d} {p_out[0]:.9f} {p_out[1]:.9f} {p_out[2]:.9f} "
-                        f"{q_out[1]:.9f} {q_out[2]:.9f} {q_out[3]:.9f} {q_out[0]:.9f}\n"
-                    )
-                    prev_t_ns = t_curr
-                    continue
-
-                # Normal step
-                dt = (t_curr - prev_t_ns) * 1e-9
-                prev_t_ns = t_curr
-
-                state = strapdown_step(state, omega_curr, acc_curr, dt, g_w)
-                F = build_f_matrix(state, omega_curr, acc_curr, dt)
-                Q = build_q_discrete(dt, cfg, kappa=monitor.kappa)
-                P = eskf_predict_covariance(P, F, Q, diag_floor=cov_floor, diag_cap=cov_cap)
-
-                t_sec = (t_curr - t0_ns) * 1e-9
-                stat_buf.add_sample(t_sec, omega_curr, acc_curr)
-                is_stat = stat_buf.is_stationary(g_mag=g_mag, quality=monitor.quality, params=cfg)
-                gyro_win, acc_win = stat_buf.get_window_samples(zupt_window_s)
-                omega_stat_mean = np.mean(gyro_win, axis=0) if (is_stat and len(gyro_win) > 0) else None
-                monitor.step(t_sec, omega_curr, acc_curr, is_stationary=is_stat, omega_static_mean=omega_stat_mean)
-
-                if step_res.apply_updates:
-                    state, P, _, _ = tilt_update(
-                        state, P, acc_curr, omega_curr,
-                        g_mag=g_mag, quality=monitor.quality,
-                        params=cfg, r_scale=step_res.r_scale,
-                    )
-                    if is_stat:
-                        state, P, _, _ = zupt_step(
-                            state, P, gyro_win, acc_win,
-                            g_mag=g_mag, quality=monitor.quality,
-                            params=cfg, r_scale=step_res.r_scale,
-                        )
-
-                blind_predictor.update(
-                    t_curr, is_valid=True, state=state, omega_s=gap_handler.omega_s
-                )
-
-                sec = t_curr // 1_000_000_000
-                nsec = t_curr % 1_000_000_000
-                p_s = state.p
-                q_s = state.q
-                f_out.write(
-                    f"{sec}.{nsec:09d} {p_s[0]:.9f} {p_s[1]:.9f} {p_s[2]:.9f} "
-                    f"{q_s[1]:.9f} {q_s[2]:.9f} {q_s[3]:.9f} {q_s[0]:.9f}\n"
-                )
+                process_full_step(t_curr, omega_curr, acc_curr)
 
         # Handle file shorter than T_init fallback
         if not is_initialized and init_count > 0:
@@ -393,28 +362,14 @@ def run_eskf_full(
 
                 if idx == 0:
                     prev_t_ns = t_smp
-                    sec = t_smp // 1_000_000_000
-                    nsec = t_smp % 1_000_000_000
-                    p_s = state.p
-                    q_s = state.q
-                    f_out.write(
-                        f"{sec}.{nsec:09d} {p_s[0]:.9f} {p_s[1]:.9f} {p_s[2]:.9f} "
-                        f"{q_s[1]:.9f} {q_s[2]:.9f} {q_s[3]:.9f} {q_s[0]:.9f}\n"
-                    )
-                    continue
+                else:
+                    dt = (t_smp - prev_t_ns) * 1e-9
+                    prev_t_ns = t_smp
+                    if dt > 0.0:
+                        state = strapdown_step(state, w_smp, a_smp, dt, g_w)
+                delay_buf.push(t_smp, state.p, state.q, False, f_out)
 
-                dt = (t_smp - prev_t_ns) * 1e-9
-                prev_t_ns = t_smp
-                if dt > 0.0:
-                    state = strapdown_step(state, w_smp, a_smp, dt, g_w)
-                sec = t_smp // 1_000_000_000
-                nsec = t_smp % 1_000_000_000
-                p_s = state.p
-                q_s = state.q
-                f_out.write(
-                    f"{sec}.{nsec:09d} {p_s[0]:.9f} {p_s[1]:.9f} {p_s[2]:.9f} "
-                    f"{q_s[1]:.9f} {q_s[2]:.9f} {q_s[3]:.9f} {q_s[0]:.9f}\n"
-                )
+        delay_buf.flush(f_out)
 
         # Append blind 5.0s extrapolation if requested
         if append_blind and prev_t_ns > 0:

@@ -52,10 +52,11 @@ rm -f "${BUNDLE_ZIP}"
 # Per PRD Section 8.1, the bundle must contain:
 # team_name.zip
 # ├── estimated_trajectory.txt
-# ├── metadata.json
+# ├── metadata.json (and optional CollegeName_TeamName.json)
 # └── src/
-zip -r "${BUNDLE_ZIP}" estimated_trajectory.txt metadata.json src/ \
-    -x "src/cpp/build/*" -x "src/main" -x "*.pyc" -x "*/__pycache__/*" > /dev/null
+cp -f metadata.json "${TEAM_NAME}.json" 2>/dev/null || true
+zip -r "${BUNDLE_ZIP}" estimated_trajectory.txt metadata.json "${TEAM_NAME}.json" src/ \
+    -x "src/build/*" -x "src/cpp/build/*" -x "src/main" -x "*.pyc" -x "*/__pycache__/*" > /dev/null
 
 echo "      Bundle created successfully: ${BUNDLE_ZIP} ($(du -h "${BUNDLE_ZIP}" | cut -f1))"
 

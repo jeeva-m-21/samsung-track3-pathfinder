@@ -466,6 +466,7 @@ class StationaryWindowBuffer:
         self.acc: np.ndarray = np.zeros((self.capacity, 3), dtype=np.float64)
         self.head: int = 0
         self.count: int = 0
+        self.acc_filter = Butterworth2LowPass()
 
     def clear(self) -> None:
         """Reset the buffer state."""
@@ -474,6 +475,7 @@ class StationaryWindowBuffer:
         self.timestamps.fill(0.0)
         self.gyro.fill(0.0)
         self.acc.fill(0.0)
+        self.acc_filter = Butterworth2LowPass()
 
     def add_sample(
         self,
@@ -575,3 +577,70 @@ class StationaryWindowBuffer:
         return zupt_detect_stationary(
             gyro_win, acc_win, g_mag=g_mag, quality=quality, params=p_cfg
         )
+
+
+class Butterworth2LowPass:
+    """2nd-order Butterworth low-pass filter (fc = 14 Hz, fs = 200 Hz)."""
+
+    b0: float = 0.03657483584392802
+    b1: float = 0.07314967168785604
+    b2: float = 0.03657483584392802
+    a1: float = -1.3908952814253894
+    a2: float = 0.5371946248011015
+
+    def __init__(self) -> None:
+        self.d1 = np.zeros(3, dtype=np.float64)
+        self.d2 = np.zeros(3, dtype=np.float64)
+        self.initialized = False
+
+    def reset(self, x0: np.ndarray) -> None:
+        x0_arr = np.asarray(x0, dtype=np.float64).reshape(3)
+        self.d1 = x0_arr * (self.b1 + self.b2 - self.a1 - self.a2)
+        self.d2 = x0_arr * (self.b2 - self.a2)
+        self.initialized = True
+
+    def step(self, x: np.ndarray) -> np.ndarray:
+        x_arr = np.asarray(x, dtype=np.float64).reshape(3)
+        if not self.initialized:
+            self.reset(x_arr)
+            return x_arr.copy()
+        y = x_arr * self.b0 + self.d1
+        self.d1 = x_arr * self.b1 - y * self.a1 + self.d2
+        self.d2 = x_arr * self.b2 - y * self.a2
+        return y
+
+
+def apply_velocity_bounding(
+    state: NominalState,
+    P: np.ndarray,
+    max_speed: Optional[float] = None,
+    sigma_v: Optional[float] = None,
+    params: Optional[Dict[str, Any]] = None,
+) -> Tuple[NominalState, np.ndarray, bool]:
+    """Soft velocity bounding pseudo-measurement update."""
+    if params is None:
+        p_cfg = load_params()
+    else:
+        p_cfg = params
+
+    if not bool(p_cfg.get("enable_velocity_bounding", True)):
+        return state, P, False
+
+    limit = float(max_speed if max_speed is not None else p_cfg.get("max_velocity_mps", 3.0))
+    sig = float(sigma_v if sigma_v is not None else p_cfg.get("velocity_bounding_sigma", 0.2))
+
+    v = state.v
+    v_norm = float(np.linalg.norm(v))
+    if v_norm <= limit or v_norm < 1e-12:
+        return state, P, False
+
+    target_v = v * (limit / v_norm)
+    y_v = target_v - v
+
+    H_v = np.zeros((3, 15), dtype=np.float64)
+    H_v[0:3, 3:6] = np.eye(3, dtype=np.float64)
+    R_v = (sig ** 2) * np.eye(3, dtype=np.float64)
+
+    updated_state, updated_P, _ = eskf_measurement_update(state, P, H_v, y_v, R_v)
+    return updated_state, updated_P, True
+
