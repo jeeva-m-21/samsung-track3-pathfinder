@@ -54,6 +54,13 @@ def test_fuzz_case(tmp_path: Path, case: FuzzCase) -> None:
         f"Case '{case.name}' crashed with returncode {proc.returncode}!\n"
         f"Stderr: {proc.stderr.decode('utf-8', errors='replace')}"
     )
+    stderr_lower = proc.stderr.decode("utf-8", errors="replace").lower()
+    assert "sanitizer" not in stderr_lower, (
+        f"Sanitizer error in case '{case.name}':\n{proc.stderr.decode('utf-8', errors='replace')}"
+    )
+    assert "runtime error:" not in stderr_lower, (
+        f"UBSan error in case '{case.name}':\n{proc.stderr.decode('utf-8', errors='replace')}"
+    )
     assert proc.returncode in case.expected_exit_codes, (
         f"Case '{case.name}' returned {proc.returncode}, expected {case.expected_exit_codes}.\n"
         f"Stderr: {proc.stderr.decode('utf-8', errors='replace')}"
@@ -137,6 +144,9 @@ def test_fuzz_ablation_modes(tmp_path: Path, mode: str, case_name: str) -> None:
     cmd = [str(CPP_BINARY), str(in_path), str(out_path), f"--ablation={mode}"]
     proc = subprocess.run(cmd, capture_output=True, timeout=5.0)
 
+    stderr_lower = proc.stderr.decode("utf-8", errors="replace").lower()
+    assert "sanitizer" not in stderr_lower, f"Sanitizer error in mode {mode} on {case_name}: {proc.stderr}"
+    assert "runtime error:" not in stderr_lower, f"UBSan error in mode {mode} on {case_name}: {proc.stderr}"
     assert proc.returncode in (0, 1), f"Mode {mode} on case {case_name} crashed: returncode {proc.returncode}"
 
     # For full and basic ESKF pipelines, verify gap/outlier rejection guarantees no NaNs or Infs
@@ -161,6 +171,9 @@ def test_fuzz_append_blind(tmp_path: Path, mode: str) -> None:
     cmd = [str(CPP_BINARY), str(in_path), str(out_path), f"--ablation={mode}", "--append-blind"]
     proc = subprocess.run(cmd, capture_output=True, timeout=5.0)
 
+    stderr_lower = proc.stderr.decode("utf-8", errors="replace").lower()
+    assert "sanitizer" not in stderr_lower, f"Sanitizer error in append-blind mode {mode}: {proc.stderr}"
+    assert "runtime error:" not in stderr_lower, f"UBSan error in append-blind mode {mode}: {proc.stderr}"
     assert proc.returncode in (0, 1), f"--append-blind in mode {mode} crashed: returncode {proc.returncode}"
 
     if out_path.exists() and out_path.stat().st_size > 0:

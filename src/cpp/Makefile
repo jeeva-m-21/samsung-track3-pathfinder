@@ -48,7 +48,7 @@ $(TEST_ESKF_TARGET): $(TEST_ESKF_SRC) $(BUILD_DIR)/init.o $(BUILD_DIR)/eskf.o $(
 $(TEST_MODULES_TARGET): $(TEST_MODULES_SRC) $(MODULE_OBJS) $(DEPS) | $(BUILD_DIR)
 	$(CXX) $(CXXFLAGS) -I. -I$(REPO_ROOT) -o $@ $(TEST_MODULES_SRC) $(MODULE_OBJS) $(LDFLAGS)
 
-sanitize: CXXFLAGS += -fsanitize=address,undefined -g
+sanitize: CXXFLAGS += -fsanitize=address,undefined -fno-omit-frame-pointer -g
 sanitize: clean $(TARGET) $(TEST_MATH_TARGET) $(TEST_ESKF_TARGET) $(TEST_MODULES_TARGET)
 
 clean:
