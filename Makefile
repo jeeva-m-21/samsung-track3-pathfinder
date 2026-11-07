@@ -1,13 +1,13 @@
 .PHONY: all clean test sanitize
 
 all:
-	$(MAKE) -C src/cpp
+	$(MAKE) -C src
 
 clean:
-	$(MAKE) -C src/cpp clean
+	$(MAKE) -C src clean
 
 test:
-	$(MAKE) -C src/cpp test
+	$(MAKE) -C src test
 
 sanitize:
-	$(MAKE) -C src/cpp sanitize
+	$(MAKE) -C src sanitize

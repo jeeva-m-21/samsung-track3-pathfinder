@@ -1,0 +1,30 @@
+{
+  "team": "VITC_SingleThread",
+  "track": "Track 3: Path Finder (IMU-Only Dead-Reckoning)",
+  "implementation": "C++17, single thread, zero dynamic heap allocation",
+  "peak_rss_kb": 2392,
+  "cpu_ms_per_second_of_imu": 1.0408,
+  "samples": 28826,
+  "data_duration_s": 144.125,
+  "host": {
+    "arch": "x86_64",
+    "os": "Linux",
+    "compiler": "g++ (GCC C++17) -O3 -fno-exceptions -fno-rtti"
+  },
+  "constraints_verification": {
+    "peak_rss_budget_pass": true,
+    "cpu_latency_budget_pass": true,
+    "single_thread_pass": true,
+    "zero_dynamic_allocation_in_loop": true,
+    "format_validation_pass": true
+  },
+  "performance_metrics": {
+    "objective_J": 0.1364,
+    "improvement_vs_naive_pct": 86.36,
+    "ate_rmse_m": 3.5209,
+    "blind_5s_rmse_m": 5.7608,
+    "dropout_rmse_m": 6.8851,
+    "rpe_1s_rmse_m": 1.7362
+  },
+  "commit": "8d2b2b87f1b0e11879252f1119201599d4ebb1a6"
+}

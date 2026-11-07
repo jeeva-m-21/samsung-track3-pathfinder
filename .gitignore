@@ -8,3 +8,7 @@ __pycache__/
 results/tmp/
 .venv/
 requirements.txt
+*.zip
+main
+src/main
+src/cpp/build/
