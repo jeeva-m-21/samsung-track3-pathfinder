@@ -245,6 +245,12 @@ void Initializer::finish(NominalState& state, Mat15& P0, Vec3& g_w) const {
     Vec3 w_mean = w_sum * inv_n;
     Vec3 a_mean = a_sum * inv_n;
 
+    // If calibration window has high angular rate (> 0.20 rad/s / ~11.5 deg/s),
+    // this is active vehicle flight, NOT stationary sensor turn-on bias.
+    if (w_mean.norm() > 0.20) {
+        motion_detected_ = true;
+    }
+
     Vec3 a_ref;
     if (motion_detected_) {
         // Dynamic motion fallback: use first valid sample's tilt and zero bias

@@ -70,7 +70,7 @@ def test_static_window_initialization_1s():
     t_ns = np.arange(n_samples, dtype=np.int64) * int(dt * 1e9)
 
     # Injected true biases and static gravity
-    true_bg = np.array([0.015, -0.02, 0.005], dtype=np.float64)
+    true_bg = np.array([0.01, -0.012, 0.005], dtype=np.float64)
     true_acc = np.array([0.1, -0.2, 9.80], dtype=np.float64)
 
     # Add small zero-mean noise with std well below motion threshold

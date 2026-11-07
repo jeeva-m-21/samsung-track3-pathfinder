@@ -350,6 +350,11 @@ def initialize_from_window(
     # Detect motion
     motion = detect_motion(omega_win_valid, acc_win_valid, cfg)
 
+    w_mean = np.mean(omega_win_valid, axis=0).astype(np.float64)
+    # If calibration window has high angular rate (> 0.20 rad/s), this is dynamic motion
+    if float(np.linalg.norm(w_mean)) > 0.20:
+        motion = True
+
     # Initial estimates
     if motion:
         # Use first valid sample's tilt and zero gyro bias
@@ -357,7 +362,7 @@ def initialize_from_window(
         a_ref = acc_win_valid[0]
     else:
         # Mean gyro as bias and mean accel for tilt
-        b_g = np.mean(omega_win_valid, axis=0).astype(np.float64)
+        b_g = w_mean
         a_ref = np.mean(acc_win_valid, axis=0).astype(np.float64)
 
     b_a = np.zeros(3, dtype=np.float64)

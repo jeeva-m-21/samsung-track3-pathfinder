@@ -39,6 +39,22 @@ int main(int argc, char* argv[]) {
     }
 
     if (!raw_input_path) {
+        // Fallback: search for standard input files in current working directory
+        const char* local_candidates[] = {
+            "imu0/data.csv",
+            "mav0/imu0/data.csv",
+            "data.csv"
+        };
+        for (const char* cand : local_candidates) {
+            struct stat st_local;
+            if (stat(cand, &st_local) == 0 && S_ISREG(st_local.st_mode)) {
+                raw_input_path = cand;
+                break;
+            }
+        }
+    }
+
+    if (!raw_input_path) {
         std::fprintf(stderr,
                      "Usage: %s <input_csv_dir_or_zip> [output_trajectory.txt] [--append-blind] [--ablation MODE]\n",
                      argv[0]);
@@ -110,7 +126,8 @@ int main(int argc, char* argv[]) {
             if (ret != 0 || stat(tmp_path, &st_zip) != 0 || st_zip.st_size == 0) {
                 std::snprintf(cmd, sizeof(cmd), "unzip -p '%s' '*data.csv' > '%s' 2>/dev/null",
                               raw_input_path, tmp_path);
-                std::system(cmd);
+                int ret2 = std::system(cmd);
+                (void)ret2;
             }
 
             if (stat(tmp_path, &st_zip) == 0 && st_zip.st_size > 0) {

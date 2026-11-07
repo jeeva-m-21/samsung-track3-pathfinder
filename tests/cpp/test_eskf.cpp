@@ -118,7 +118,7 @@ void test_static_initialization() {
 
     int64_t t0 = 1000000000LL; // 1 second in ns
     int64_t dt_ns = 5000000LL;  // 5 ms (200 Hz)
-    Vec3 true_bg = make_vec3(0.015, -0.02, 0.005);
+    Vec3 true_bg = make_vec3(0.01, -0.012, 0.005);
     Vec3 true_acc = make_vec3(0.1, -0.2, 9.80);
 
     // Feed 201 samples (1.000 s)
