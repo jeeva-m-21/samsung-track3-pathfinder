@@ -47,7 +47,7 @@
   "tau_omega": 1.5,
   "shrink_v": 0.9,
   "stationary_v_thresh": 0.05,
-  "enable_iir_filter": true,
+  "enable_iir_filter": false,
   "iir_cutoff_hz": 14.0,
   "enable_velocity_bounding": true,
   "max_velocity_mps": 3.0,

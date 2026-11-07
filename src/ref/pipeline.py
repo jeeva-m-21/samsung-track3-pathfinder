@@ -320,7 +320,7 @@ def run_eskf_full(
             P = eskf_predict_covariance(P, F, Q, diag_floor=cov_floor, diag_cap=cov_cap)
 
             t_sec = (t_curr - t0_ns) * 1e-9
-            acc_filt = tilt_filter.step(acc_curr) if cfg.get("enable_iir_filter", True) else acc_curr
+            acc_filt = tilt_filter.step(acc_curr) if cfg.get("enable_iir_filter", False) else acc_curr
 
             stat_buf.add_sample(t_sec, omega_curr, acc_curr, state.b_g)
             bool_stat = stat_buf.is_stationary(g_mag=g_mag, quality=monitor.quality, params=cfg)
