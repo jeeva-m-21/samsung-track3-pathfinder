@@ -28,7 +28,7 @@ Last passed gate: G3
 | WP-33 | DONE | CppPort | 0 | Updates, monitor, gap handler, blind predictor verified PASS |
 | WP-34 | DONE | CppPort | 0 | Full pipeline, ablations, diff parity, Gate G3 verified PASS |
 | WP-35 | DONE | CppPort | 0 | Performance pass satisfied (RSS 2.4MB <= 4MB, latency 0.0ms/s <= 2.0ms/s) |
-| WP-40 | IN_PROGRESS | QA | 0 | Fuzz inputs generator + runner |
+| WP-40 | REVIEW | QA | 0 | Adversarial fuzz generator + runner verified (57 tests passing) |
 | WP-41 | TODO | QA | 0 | ASan/UBSan build and run |
 | WP-42 | TODO | QA | 0 | Budget regression + determinism script |
 | WP-50 | TODO | Tuner | 0 | tools/tune.py (Optuna, CV by sequence) + export |
