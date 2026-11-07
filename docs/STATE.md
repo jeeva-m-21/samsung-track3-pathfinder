@@ -26,7 +26,7 @@ Last passed gate: G2
 | WP-31 | DONE | CppPort | 0 | mat.h, quat.h fixed-size math + C++ unit tests verified PASS |
 | WP-32 | DONE | CppPort | 0 | Init, strapdown, ESKF predict verified PASS |
 | WP-33 | DONE | CppPort | 0 | Updates, monitor, gap handler, blind predictor verified PASS |
-| WP-34 | TODO | CppPort | 0 | scripts/diff_py_cpp.py and full differential test |
+| WP-34 | IN_PROGRESS | CppPort | 0 | scripts/diff_py_cpp.py and full differential test |
 | WP-35 | TODO | CppPort | 0 | Performance pass if budgets missed |
 | WP-40 | TODO | QA | 0 | Fuzz inputs generator + runner |
 | WP-41 | TODO | QA | 0 | ASan/UBSan build and run |
