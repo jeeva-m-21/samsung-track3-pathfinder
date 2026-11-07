@@ -136,8 +136,11 @@ def compute_initial_tilt(a_mean: np.ndarray) -> np.ndarray:
         q: (4,) unit Hamilton quaternion [w, x, y, z] with q_w >= 0.
     """
     a_vec = np.asarray(a_mean, dtype=np.float64).reshape(3)
+    if not np.all(np.isfinite(a_vec)):
+        return np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float64)
+
     norm_a = float(np.linalg.norm(a_vec))
-    if norm_a < 1e-8:
+    if not np.isfinite(norm_a) or norm_a < 1e-8:
         return np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float64)
 
     v = a_vec / norm_a  # unit body vector
@@ -146,7 +149,7 @@ def compute_initial_tilt(a_mean: np.ndarray) -> np.ndarray:
     cos_theta = float(v[2])  # dot(v, [0, 0, 1]) == v[2]
 
     # Threshold for parallel vectors
-    if cos_theta > 0.999999999:
+    if not np.isfinite(cos_theta) or cos_theta > 0.999999999:
         return np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float64)
     # Threshold for anti-parallel vectors (180 deg rotation about x)
     if cos_theta < -0.999999999:
@@ -193,12 +196,22 @@ def detect_motion(
     if len(omega_arr) < 2 or len(acc_arr) < 2:
         return False
 
+    valid_mask = (
+        np.all(np.isfinite(omega_arr), axis=1)
+        & np.all(np.isfinite(acc_arr), axis=1)
+    )
+    if np.sum(valid_mask) < 2:
+        return False
+
+    omega_valid = omega_arr[valid_mask]
+    acc_valid = acc_arr[valid_mask]
+
     # Check axis-wise and norm gyro variation
-    gyro_std_axes = np.std(omega_arr, axis=0)
-    gyro_std_norm = np.std(np.linalg.norm(omega_arr, axis=1))
+    gyro_std_axes = np.std(omega_valid, axis=0)
+    gyro_std_norm = np.std(np.linalg.norm(omega_valid, axis=1))
 
     # Check accel norm variation
-    acc_norms = np.linalg.norm(acc_arr, axis=1)
+    acc_norms = np.linalg.norm(acc_valid, axis=1)
     acc_norm_std = np.std(acc_norms)
 
     is_motion = bool(
@@ -304,20 +317,48 @@ def initialize_from_window(
 
     omega_win = omega_arr[mask]
     acc_win = acc_arr[mask]
-    samples_used = int(np.sum(mask))
+
+    # Filter finite samples
+    win_valid_mask = (
+        np.all(np.isfinite(omega_win), axis=1)
+        & np.all(np.isfinite(acc_win), axis=1)
+    )
+    if not np.any(win_valid_mask):
+        p = np.zeros(3, dtype=np.float64)
+        v = np.zeros(3, dtype=np.float64)
+        q0 = np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float64)
+        b_g = np.zeros(3, dtype=np.float64)
+        b_a = np.zeros(3, dtype=np.float64)
+        g_mag = 9.80665
+        g_w = np.array([0.0, 0.0, -g_mag], dtype=np.float64)
+        P0 = initialize_covariance(cfg, motion_detected=False)
+        state = NominalState(p=p, v=v, q=q0, b_g=b_g, b_a=b_a)
+        return InitResult(
+            state=state,
+            P=P0,
+            g_w=g_w,
+            g_mag=g_mag,
+            motion_detected=False,
+            samples_used=0,
+            t0=t_arr[0],
+        )
+
+    omega_win_valid = omega_win[win_valid_mask]
+    acc_win_valid = acc_win[win_valid_mask]
+    samples_used = int(np.sum(win_valid_mask))
 
     # Detect motion
-    motion = detect_motion(omega_win, acc_win, cfg)
+    motion = detect_motion(omega_win_valid, acc_win_valid, cfg)
 
     # Initial estimates
     if motion:
-        # Use first sample's tilt and zero gyro bias
+        # Use first valid sample's tilt and zero gyro bias
         b_g = np.zeros(3, dtype=np.float64)
-        a_ref = acc_win[0]
+        a_ref = acc_win_valid[0]
     else:
         # Mean gyro as bias and mean accel for tilt
-        b_g = np.mean(omega_win, axis=0).astype(np.float64)
-        a_ref = np.mean(acc_win, axis=0).astype(np.float64)
+        b_g = np.mean(omega_win_valid, axis=0).astype(np.float64)
+        a_ref = np.mean(acc_win_valid, axis=0).astype(np.float64)
 
     b_a = np.zeros(3, dtype=np.float64)
     p = np.zeros(3, dtype=np.float64)
@@ -390,10 +431,15 @@ class OnlineInitializer:
         if not is_valid:
             return False
 
+        w_arr = np.asarray(omega, dtype=np.float64).reshape(3)
+        a_arr = np.asarray(acc, dtype=np.float64).reshape(3)
+        if not (np.all(np.isfinite(w_arr)) and np.all(np.isfinite(a_arr))):
+            return False
+
         if self._count < self.MAX_BUFFER_SAMPLES:
             self._t_buf[self._count] = int(t_ns)
-            self._omega_buf[self._count] = np.asarray(omega, dtype=np.float64)
-            self._acc_buf[self._count] = np.asarray(acc, dtype=np.float64)
+            self._omega_buf[self._count] = w_arr
+            self._acc_buf[self._count] = a_arr
             self._count += 1
 
         # Check if duration reached T_init
@@ -410,13 +456,39 @@ class OnlineInitializer:
         if self._is_ready:
             return True
         if self._count < 2:
-            return False
+            self._compute_safe_fallback()
+            return True
 
         dt_span_s = (self._t_buf[self._count - 1] - self._t_buf[0]) * 1e-9
         if dt_span_s >= self.t_init_fallback:
             self._compute_initialisation()
             return True
-        return False
+
+        self._compute_safe_fallback()
+        return True
+
+    def _compute_safe_fallback(self) -> None:
+        """Safe fallback with nominal gravity and zero bias when calibration window is invalid."""
+        p = np.zeros(3, dtype=np.float64)
+        v = np.zeros(3, dtype=np.float64)
+        q0 = np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float64)
+        b_g = np.zeros(3, dtype=np.float64)
+        b_a = np.zeros(3, dtype=np.float64)
+        g_mag = 9.80665
+        g_w = np.array([0.0, 0.0, -g_mag], dtype=np.float64)
+        P0 = initialize_covariance(self.params, motion_detected=False)
+        state = NominalState(p=p, v=v, q=q0, b_g=b_g, b_a=b_a)
+        t0 = int(self._t_buf[0]) if self._count > 0 else 0
+        self._result = InitResult(
+            state=state,
+            P=P0,
+            g_w=g_w,
+            g_mag=g_mag,
+            motion_detected=False,
+            samples_used=self._count,
+            t0=t0,
+        )
+        self._is_ready = True
 
     def _compute_initialisation(self) -> None:
         """Compute initial filter state from buffered samples."""

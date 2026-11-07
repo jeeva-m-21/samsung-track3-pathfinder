@@ -263,3 +263,32 @@ def test_online_initializer_streaming():
     assert res_online.motion_detected is False
     np.testing.assert_allclose(res_online.state.b_g, [0.01, -0.01, 0.005], atol=1e-12)
     np.testing.assert_allclose(res_online.state.q, [1.0, 0.0, 0.0, 0.0], atol=1e-12)
+
+
+def test_nan_calibration_window_fallback():
+    """Verify safe fallback to nominal gravity and zero bias when init window contains NaNs."""
+    params = load_params()
+    initializer = OnlineInitializer(params=params)
+
+    # Feed 100 samples with NaN values and is_valid=False
+    for k in range(100):
+        t_ns = k * 5000000
+        omega = np.array([float("nan"), float("nan"), float("nan")])
+        acc = np.array([float("nan"), float("nan"), float("nan")])
+        initializer.feed(t_ns, omega, acc, is_valid=False)
+
+    assert initializer.is_ready is False
+    # Finalize fallback should safely initialize with nominal gravity
+    assert initializer.finalize_fallback() is True
+    res = initializer.get_result()
+    assert res is not None
+    assert np.all(np.isfinite(res.state.p))
+    assert np.all(np.isfinite(res.state.v))
+    assert np.all(np.isfinite(res.state.q))
+    assert np.all(np.isfinite(res.state.b_g))
+    np.testing.assert_allclose(res.state.p, [0.0, 0.0, 0.0])
+    np.testing.assert_allclose(res.state.v, [0.0, 0.0, 0.0])
+    np.testing.assert_allclose(res.state.b_g, [0.0, 0.0, 0.0])
+    np.testing.assert_allclose(res.state.q, [1.0, 0.0, 0.0, 0.0])
+    np.testing.assert_allclose(res.g_w, [0.0, 0.0, -9.80665])
+    assert res.g_mag == 9.80665

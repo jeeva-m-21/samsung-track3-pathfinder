@@ -57,12 +57,20 @@ struct TrajectoryCollector {
 };
 
 void apply_bounded_workspace_filter(Vec3* pos, size_t count, double dt_nom, double cutoff_period) {
+    if (count == 0) {
+        return;
+    }
+
+    for (size_t i = 0; i < count; ++i) {
+        if (!std::isfinite(pos[i].data[0]) || !std::isfinite(pos[i].data[1]) || !std::isfinite(pos[i].data[2])) {
+            pos[i] = math::make_vec3(0.0, 0.0, 0.0);
+        }
+    }
+
     if (count < 15 || dt_nom <= 0.0 || cutoff_period <= 0.0) {
-        if (count > 0) {
-            Vec3 p0 = pos[0];
-            for (size_t i = 0; i < count; ++i) {
-                pos[i] = pos[i] - p0;
-            }
+        Vec3 p0 = pos[0];
+        for (size_t i = 0; i < count; ++i) {
+            pos[i] = pos[i] - p0;
         }
         return;
     }
@@ -393,7 +401,7 @@ int run_naive(const char* input_path,
             } else {
                 double dt = static_cast<double>(t_k - prev_t_ns) * 1e-9;
                 prev_t_ns = t_k;
-                if (dt > 0.0 && dt < 10.0) {
+                if (dt > 0.0 && dt < 10.0 && s_init_buf[k].is_valid) {
                     if (dt_count < 200) dt_samples[dt_count++] = dt;
                     Quat delta_q = math::exp_map(s_init_buf[k].omega * dt);
                     Quat q_new = math::normalize(q * delta_q);
@@ -404,6 +412,12 @@ int run_naive(const char* input_path,
                     v += a_w * dt;
                     q = q_new;
                 }
+            }
+            if (!std::isfinite(p.data[0]) || !std::isfinite(p.data[1]) || !std::isfinite(p.data[2])) {
+                p = math::make_vec3(0.0, 0.0, 0.0);
+            }
+            if (!std::isfinite(q.w) || !std::isfinite(q.x) || !std::isfinite(q.y) || !std::isfinite(q.z)) {
+                q = Quat::identity();
             }
             writer.write_pose(t_k, p.data[0], p.data[1], p.data[2],
                               q.x, q.y, q.z, q.w);
@@ -607,7 +621,7 @@ int run_mahony(const char* input_path,
             } else {
                 double dt = static_cast<double>(t_k - prev_t_ns) * 1e-9;
                 prev_t_ns = t_k;
-                if (dt > 0.0 && dt < 10.0) {
+                if (dt > 0.0 && dt < 10.0 && s_init_buf[k].is_valid) {
                     if (dt_count < 200) dt_samples[dt_count++] = dt;
                     Quat delta_q = math::exp_map(s_init_buf[k].omega * dt);
                     Quat q_new = math::normalize(q * delta_q);
@@ -618,6 +632,12 @@ int run_mahony(const char* input_path,
                     v += a_w * dt;
                     q = q_new;
                 }
+            }
+            if (!std::isfinite(p.data[0]) || !std::isfinite(p.data[1]) || !std::isfinite(p.data[2])) {
+                p = math::make_vec3(0.0, 0.0, 0.0);
+            }
+            if (!std::isfinite(q.w) || !std::isfinite(q.x) || !std::isfinite(q.y) || !std::isfinite(q.z)) {
+                q = Quat::identity();
             }
             writer.write_pose(t_k, p.data[0], p.data[1], p.data[2],
                               q.x, q.y, q.z, q.w);
@@ -788,9 +808,15 @@ int run_eskf_basic(const char* input_path,
             } else {
                 double dt = static_cast<double>(t_smp - prev_t_ns) * 1e-9;
                 prev_t_ns = t_smp;
-                if (dt > 0.0) {
+                if (dt > 0.0 && s_init_buf[idx].is_valid) {
                     state = strapdown_step(state, s_init_buf[idx].omega, s_init_buf[idx].acc, dt, g_w);
                 }
+            }
+            if (!std::isfinite(state.p.data[0]) || !std::isfinite(state.p.data[1]) || !std::isfinite(state.p.data[2])) {
+                state.p = math::make_vec3(0.0, 0.0, 0.0);
+            }
+            if (!std::isfinite(state.q.w) || !std::isfinite(state.q.x) || !std::isfinite(state.q.y) || !std::isfinite(state.q.z)) {
+                state.q = Quat::identity();
             }
             writer.write_pose(t_smp, state.p.data[0], state.p.data[1], state.p.data[2],
                               state.q.x, state.q.y, state.q.z, state.q.w);
@@ -942,7 +968,7 @@ int run_eskf_full(const char* input_path,
                 initializer.add_sample(sample.t_ns, w_curr, acc_curr);
             }
 
-            if (initializer.is_ready()) {
+            if (initializer.is_ready() || (!is_initialized && init_count >= MAX_INIT_SAMPLES)) {
                 is_initialized = true;
                 initializer.finish(state, P, g_w);
                 g_mag = initializer.g_mag();
@@ -985,9 +1011,15 @@ int run_eskf_full(const char* input_path,
             } else {
                 double dt = static_cast<double>(t_smp - prev_t_ns) * 1e-9;
                 prev_t_ns = t_smp;
-                if (dt > 0.0) {
+                if (dt > 0.0 && s_init_buf[idx].is_valid) {
                     state = strapdown_step(state, s_init_buf[idx].omega, s_init_buf[idx].acc, dt, g_w);
                 }
+            }
+            if (!std::isfinite(state.p.data[0]) || !std::isfinite(state.p.data[1]) || !std::isfinite(state.p.data[2])) {
+                state.p = math::make_vec3(0.0, 0.0, 0.0);
+            }
+            if (!std::isfinite(state.q.w) || !std::isfinite(state.q.x) || !std::isfinite(state.q.y) || !std::isfinite(state.q.z)) {
+                state.q = Quat::identity();
             }
             delay_buf.push(t_smp, state.p, state.q, false, collector);
         }

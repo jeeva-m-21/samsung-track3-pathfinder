@@ -83,17 +83,21 @@ def apply_bounded_workspace_filter(
     pos: np.ndarray, dt_nom: float, cutoff_period: float
 ) -> np.ndarray:
     count = len(pos)
-    if count < 15 or dt_nom <= 0.0 or cutoff_period <= 0.0:
-        if count > 0:
-            return pos - pos[0]
+    if count == 0:
         return pos.copy()
+
+    pos_out = pos.copy()
+    invalid_mask = ~np.isfinite(pos_out)
+    if np.any(invalid_mask):
+        pos_out[invalid_mask] = 0.0
+
+    if count < 15 or dt_nom <= 0.0 or cutoff_period <= 0.0:
+        return pos_out - pos_out[0]
 
     fs = 1.0 / dt_nom
     fc = 1.0 / cutoff_period
     if fc >= 0.5 * fs:
-        if count > 0:
-            return pos - pos[0]
-        return pos.copy()
+        return pos_out - pos_out[0]
 
     K = math.tan(math.pi * fc / fs)
     norm = 1.0 + math.sqrt(2.0) * K + K * K
@@ -420,8 +424,12 @@ def run_eskf_full(
                 else:
                     dt = (t_smp - prev_t_ns) * 1e-9
                     prev_t_ns = t_smp
-                    if dt > 0.0:
+                    if dt > 0.0 and init_valid[idx]:
                         state = strapdown_step(state, w_smp, a_smp, dt, g_w)
+                if not np.all(np.isfinite(state.p)):
+                    state.p = np.zeros(3, dtype=np.float64)
+                if not np.all(np.isfinite(state.q)):
+                    state.q = np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float64)
                 delay_buf.push(t_smp, state.p, state.q, False, collector)
 
         delay_buf.flush(collector)
@@ -643,8 +651,12 @@ def run_eskf_basic(
                 else:
                     dt = (t_smp - prev_t_ns) * 1e-9
                     prev_t_ns = t_smp
-                    if dt > 0.0:
+                    if dt > 0.0 and init_valid[idx]:
                         state = strapdown_step(state, init_omega[idx], init_acc[idx], dt, g_w)
+                if not np.all(np.isfinite(state.p)):
+                    state.p = np.zeros(3, dtype=np.float64)
+                if not np.all(np.isfinite(state.q)):
+                    state.q = np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float64)
                 sec = t_smp // 1_000_000_000
                 nsec = t_smp % 1_000_000_000
                 p_s = state.p

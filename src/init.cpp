@@ -4,15 +4,19 @@
 using namespace math;
 
 Quat compute_initial_tilt(const Vec3& a_mean) {
+    if (!std::isfinite(a_mean.data[0]) || !std::isfinite(a_mean.data[1]) || !std::isfinite(a_mean.data[2])) {
+        return Quat{1.0, 0.0, 0.0, 0.0};
+    }
+
     double norm_a = a_mean.norm();
-    if (norm_a < 1e-8) {
+    if (!std::isfinite(norm_a) || norm_a < 1e-8) {
         return Quat{1.0, 0.0, 0.0, 0.0};
     }
 
     Vec3 v = a_mean / norm_a;
     double cos_theta = v.data[2]; // dot(v, [0, 0, 1])
 
-    if (cos_theta > 0.999999999) {
+    if (!std::isfinite(cos_theta) || cos_theta > 0.999999999) {
         return Quat{1.0, 0.0, 0.0, 0.0};
     }
     if (cos_theta < -0.999999999) {
@@ -42,18 +46,27 @@ bool detect_motion(const Vec3* omega_buf, const Vec3* acc_buf, size_t count) {
     double gyro_thresh = params::motion_detect_gyro_std;
     double acc_thresh = params::motion_detect_acc_std;
 
-    // Means
+    // Filter finite samples
     Vec3 w_mean = make_vec3(0.0, 0.0, 0.0);
     double w_norm_mean = 0.0;
     double a_norm_mean = 0.0;
+    size_t valid_count = 0;
 
     for (size_t i = 0; i < count; ++i) {
-        w_mean += omega_buf[i];
-        w_norm_mean += omega_buf[i].norm();
-        a_norm_mean += acc_buf[i].norm();
+        if (std::isfinite(omega_buf[i].data[0]) && std::isfinite(omega_buf[i].data[1]) && std::isfinite(omega_buf[i].data[2]) &&
+            std::isfinite(acc_buf[i].data[0]) && std::isfinite(acc_buf[i].data[1]) && std::isfinite(acc_buf[i].data[2])) {
+            w_mean += omega_buf[i];
+            w_norm_mean += omega_buf[i].norm();
+            a_norm_mean += acc_buf[i].norm();
+            valid_count++;
+        }
     }
 
-    double inv_n = 1.0 / static_cast<double>(count);
+    if (valid_count < 2) {
+        return false;
+    }
+
+    double inv_n = 1.0 / static_cast<double>(valid_count);
     w_mean *= inv_n;
     w_norm_mean *= inv_n;
     a_norm_mean *= inv_n;
@@ -64,27 +77,30 @@ bool detect_motion(const Vec3* omega_buf, const Vec3* acc_buf, size_t count) {
     double a_norm_var = 0.0;
 
     for (size_t i = 0; i < count; ++i) {
-        Vec3 dw = omega_buf[i] - w_mean;
-        w_var.data[0] += dw.data[0] * dw.data[0];
-        w_var.data[1] += dw.data[1] * dw.data[1];
-        w_var.data[2] += dw.data[2] * dw.data[2];
+        if (std::isfinite(omega_buf[i].data[0]) && std::isfinite(omega_buf[i].data[1]) && std::isfinite(omega_buf[i].data[2]) &&
+            std::isfinite(acc_buf[i].data[0]) && std::isfinite(acc_buf[i].data[1]) && std::isfinite(acc_buf[i].data[2])) {
+            Vec3 dw = omega_buf[i] - w_mean;
+            w_var.data[0] += dw.data[0] * dw.data[0];
+            w_var.data[1] += dw.data[1] * dw.data[1];
+            w_var.data[2] += dw.data[2] * dw.data[2];
 
-        double d_wn = omega_buf[i].norm() - w_norm_mean;
-        w_norm_var += d_wn * d_wn;
+            double d_wn = omega_buf[i].norm() - w_norm_mean;
+            w_norm_var += d_wn * d_wn;
 
-        double d_an = acc_buf[i].norm() - a_norm_mean;
-        a_norm_var += d_an * d_an;
+            double d_an = acc_buf[i].norm() - a_norm_mean;
+            a_norm_var += d_an * d_an;
+        }
     }
 
     w_var *= inv_n;
     w_norm_var *= inv_n;
     a_norm_var *= inv_n;
 
-    double gyro_std_x = std::sqrt(w_var.data[0]);
-    double gyro_std_y = std::sqrt(w_var.data[1]);
-    double gyro_std_z = std::sqrt(w_var.data[2]);
-    double gyro_std_norm = std::sqrt(w_norm_var);
-    double acc_norm_std = std::sqrt(a_norm_var);
+    double gyro_std_x = std::sqrt(std::max(0.0, w_var.data[0]));
+    double gyro_std_y = std::sqrt(std::max(0.0, w_var.data[1]));
+    double gyro_std_z = std::sqrt(std::max(0.0, w_var.data[2]));
+    double gyro_std_norm = std::sqrt(std::max(0.0, w_norm_var));
+    double acc_norm_std = std::sqrt(std::max(0.0, a_norm_var));
 
     return (gyro_std_x > gyro_thresh ||
             gyro_std_y > gyro_thresh ||
@@ -148,6 +164,12 @@ bool Initializer::add_sample(int64_t t_ns, const Vec3& w, const Vec3& a) {
         return true;
     }
 
+    // Ignore non-finite samples during calibration
+    if (!std::isfinite(w.data[0]) || !std::isfinite(w.data[1]) || !std::isfinite(w.data[2]) ||
+        !std::isfinite(a.data[0]) || !std::isfinite(a.data[1]) || !std::isfinite(a.data[2])) {
+        return false;
+    }
+
     if (count_ < MAX_SAMPLES) {
         t_buf_[count_] = t_ns;
         w_buf_[count_] = w;
@@ -171,47 +193,62 @@ bool Initializer::is_ready() const {
 }
 
 Vec3 Initializer::a_mean() const {
-    if (count_ == 0) {
+    Vec3 sum = make_vec3(0.0, 0.0, 0.0);
+    size_t valid_count = 0;
+    for (size_t i = 0; i < count_; ++i) {
+        if (std::isfinite(a_buf_[i].data[0]) && std::isfinite(a_buf_[i].data[1]) && std::isfinite(a_buf_[i].data[2])) {
+            sum += a_buf_[i];
+            valid_count++;
+        }
+    }
+    if (valid_count == 0) {
         return make_vec3(0.0, 0.0, 9.80665);
     }
-    Vec3 sum = make_vec3(0.0, 0.0, 0.0);
-    for (size_t i = 0; i < count_; ++i) {
-        sum += a_buf_[i];
-    }
-    return sum * (1.0 / static_cast<double>(count_));
+    return sum * (1.0 / static_cast<double>(valid_count));
 }
 
 void Initializer::finish(NominalState& state, Mat15& P0, Vec3& g_w) const {
-    if (count_ == 0) {
+    size_t valid_count = 0;
+    Vec3 w_sum = make_vec3(0.0, 0.0, 0.0);
+    Vec3 a_sum = make_vec3(0.0, 0.0, 0.0);
+    size_t first_valid_idx = count_;
+
+    for (size_t i = 0; i < count_; ++i) {
+        if (std::isfinite(w_buf_[i].data[0]) && std::isfinite(w_buf_[i].data[1]) && std::isfinite(w_buf_[i].data[2]) &&
+            std::isfinite(a_buf_[i].data[0]) && std::isfinite(a_buf_[i].data[1]) && std::isfinite(a_buf_[i].data[2])) {
+            if (valid_count == 0) {
+                first_valid_idx = i;
+            }
+            w_sum += w_buf_[i];
+            a_sum += a_buf_[i];
+            valid_count++;
+        }
+    }
+
+    if (valid_count == 0) {
+        // Safe fallback: nominal gravity [0, 0, 9.80665] and zero bias
         state = NominalState::zeros();
         P0 = initialize_covariance(false);
         g_mag_ = 9.80665;
-        g_w = make_vec3(0.0, 0.0, -g_mag_);
+        g_w = make_vec3(0.0, 0.0, -9.80665);
         motion_detected_ = false;
         return;
     }
 
-    if (count_ >= 2) {
+    if (valid_count >= 2) {
         motion_detected_ = detect_motion(w_buf_, a_buf_, count_);
     } else {
         motion_detected_ = false;
     }
 
-    // Window sample accumulation
-    Vec3 w_sum = make_vec3(0.0, 0.0, 0.0);
-    Vec3 a_sum = make_vec3(0.0, 0.0, 0.0);
-    for (size_t i = 0; i < count_; ++i) {
-        w_sum += w_buf_[i];
-        a_sum += a_buf_[i];
-    }
-    double inv_n = 1.0 / static_cast<double>(count_);
+    double inv_n = 1.0 / static_cast<double>(valid_count);
     Vec3 w_mean = w_sum * inv_n;
     Vec3 a_mean = a_sum * inv_n;
 
     Vec3 a_ref;
     if (motion_detected_) {
-        // Dynamic motion fallback: use first sample's tilt and zero bias
-        a_ref = a_buf_[0];
+        // Dynamic motion fallback: use first valid sample's tilt and zero bias
+        a_ref = a_buf_[first_valid_idx];
         state.b_g = make_vec3(0.0, 0.0, 0.0);
         state.b_a = make_vec3(0.0, 0.0, 0.0);
     } else {
@@ -231,7 +268,7 @@ void Initializer::finish(NominalState& state, Mat15& P0, Vec3& g_w) const {
     // Gravity magnitude clamping and world gravity vector
     double norm_a = a_ref.norm();
     double g_mag = norm_a;
-    if (g_mag < params::g_mag_clamp_min) {
+    if (!std::isfinite(g_mag) || g_mag < params::g_mag_clamp_min) {
         g_mag = params::g_mag_clamp_min;
     } else if (g_mag > params::g_mag_clamp_max) {
         g_mag = params::g_mag_clamp_max;

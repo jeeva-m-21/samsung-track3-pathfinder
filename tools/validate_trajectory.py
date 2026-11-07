@@ -18,17 +18,28 @@ from typing import List, Optional, Tuple, Union
 
 
 def resolve_imu_csv(imu_path: Union[str, Path]) -> Path:
-    """Resolve IMU path whether given as a CSV file or as a sequence directory."""
+    """Resolve IMU path whether given as a CSV file, directory, or ZIP archive."""
     p = Path(imu_path)
     if p.is_file():
+        if p.suffix.lower() == ".zip":
+            import zipfile
+            import tempfile
+            with zipfile.ZipFile(p, "r") as z:
+                # Look for imu0/data.csv or any data.csv
+                candidates = [n for n in z.namelist() if n.endswith("imu0/data.csv")]
+                if not candidates:
+                    candidates = [n for n in z.namelist() if n.endswith("data.csv")]
+                if candidates:
+                    chosen = candidates[0]
+                    tmp_out = Path(tempfile.gettempdir()) / f"imu_{p.stem}_{Path(chosen).name}"
+                    with z.open(chosen) as src_f, open(tmp_out, "wb") as dst_f:
+                        dst_f.write(src_f.read())
+                    return tmp_out
         return p
     if p.is_dir():
-        candidate = p / "imu0" / "data.csv"
-        if candidate.is_file():
-            return candidate
-        candidate2 = p / "data.csv"
-        if candidate2.is_file():
-            return candidate2
+        for cand in [p / "imu0" / "data.csv", p / "mav0" / "imu0" / "data.csv", p / "data.csv"]:
+            if cand.is_file():
+                return cand
     raise FileNotFoundError(f"Could not locate imu0/data.csv in {imu_path}")
 
 

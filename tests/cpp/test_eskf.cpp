@@ -485,6 +485,34 @@ void test_joseph_update_and_reset() {
     TEST_ASSERT_NEAR(P(3, 3), P_before(3, 3), 1e-15, "P unmutated on rejection");
 }
 
+void test_nan_initialization() {
+    std::printf("Running test_nan_initialization...\n");
+
+    Initializer init;
+    double nan_val = std::numeric_limits<double>::quiet_NaN();
+    Vec3 w_nan = make_vec3(nan_val, nan_val, nan_val);
+    Vec3 a_nan = make_vec3(nan_val, nan_val, nan_val);
+
+    for (int i = 0; i < 100; ++i) {
+        init.add_sample(i * 5000000LL, w_nan, a_nan);
+    }
+
+    TEST_ASSERT(!init.is_ready(), "NaN samples must not make initializer ready");
+
+    NominalState state;
+    Mat15 P0;
+    Vec3 g_w;
+    init.finish(state, P0, g_w);
+
+    TEST_ASSERT(std::isfinite(state.p.data[0]) && std::isfinite(state.p.data[1]) && std::isfinite(state.p.data[2]), "State p finite");
+    TEST_ASSERT(std::isfinite(state.v.data[0]) && std::isfinite(state.v.data[1]) && std::isfinite(state.v.data[2]), "State v finite");
+    TEST_ASSERT(std::isfinite(state.q.w) && std::isfinite(state.q.x) && std::isfinite(state.q.y) && std::isfinite(state.q.z), "State q finite");
+    TEST_ASSERT_NEAR(state.b_g.norm(), 0.0, 1e-15, "Fallback b_g == 0");
+    TEST_ASSERT_NEAR(state.b_a.norm(), 0.0, 1e-15, "Fallback b_a == 0");
+    TEST_ASSERT_NEAR(init.g_mag(), 9.80665, 1e-10, "Fallback g_mag == 9.80665");
+    TEST_ASSERT_NEAR(g_w.data[2], -9.80665, 1e-10, "Fallback g_w.z == -9.80665");
+}
+
 int main() {
     std::printf("===========================================\n");
     std::printf("Running C++ ESKF & Initializer Unit Tests\n");
@@ -499,6 +527,7 @@ int main() {
     test_covariance_propagation_10000_steps();
     test_covariance_conditioning();
     test_joseph_update_and_reset();
+    test_nan_initialization();
 
     std::printf("===========================================\n");
     std::printf("Test results: %d run, %d failed\n", g_tests_run, g_tests_failed);

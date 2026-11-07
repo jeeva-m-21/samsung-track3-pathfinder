@@ -288,11 +288,14 @@ def zupt_detect_stationary(
     if n == 0 or len(a_arr) != n:
         return False
 
-    # 1. Mean gyro norm
-    gyro_thresh = float(p_cfg.get("zupt_gyro_mean", 0.03))
+    # 1. Mean gyro norm and latest sample gating (prevent stationary clamp when ||omega - b_g|| > 0.015)
+    gyro_thresh = min(float(p_cfg.get("zupt_gyro_mean", 0.03)), 0.015)
     gyro_norms = np.linalg.norm(g_arr, axis=1)
     mean_gyro = float(np.mean(gyro_norms))
     if mean_gyro >= gyro_thresh:
+        return False
+
+    if float(gyro_norms[-1]) > 0.015:
         return False
 
     # 2. Accel norm deviation from g_mag

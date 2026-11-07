@@ -1,7 +1,10 @@
 #include <cinttypes>
+#include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <sys/stat.h>
+#include <unistd.h>
 #include "pipeline.h"
 
 int main(int argc, char* argv[]) {
@@ -37,7 +40,7 @@ int main(int argc, char* argv[]) {
 
     if (!raw_input_path) {
         std::fprintf(stderr,
-                     "Usage: %s <input_path_or_dir> [output_trajectory.txt] [--append-blind] [--ablation MODE]\n",
+                     "Usage: %s <input_csv_dir_or_zip> [output_trajectory.txt] [--append-blind] [--ablation MODE]\n",
                      argv[0]);
         return 1;
     }
@@ -47,12 +50,13 @@ int main(int argc, char* argv[]) {
         output_path = "estimated_trajectory.txt";
     }
 
-    // Resolve directory inputs: look for imu0/data.csv, mav0/imu0/data.csv, or data.csv
     char resolved_input[1024];
     std::snprintf(resolved_input, sizeof(resolved_input), "%s", raw_input_path);
+    char temp_extracted_file[1024] = "";
 
     struct stat st;
     if (stat(raw_input_path, &st) == 0 && S_ISDIR(st.st_mode)) {
+        // Directory input: locate imu0/data.csv, mav0/imu0/data.csv, or data.csv
         const char* subpaths[] = {
             "/imu0/data.csv",
             "/mav0/imu0/data.csv",
@@ -68,8 +72,59 @@ int main(int argc, char* argv[]) {
                 break;
             }
         }
+    } else {
+        // Check if input is a ZIP archive
+        bool is_zip = false;
+        size_t in_len = std::strlen(raw_input_path);
+        if (in_len >= 4 && std::strcmp(raw_input_path + in_len - 4, ".zip") == 0) {
+            is_zip = true;
+        } else {
+            FILE* test_fp = std::fopen(raw_input_path, "rb");
+            if (test_fp) {
+                uint8_t sig[4];
+                if (std::fread(sig, 1, 4, test_fp) == 4) {
+                    if (sig[0] == 0x50 && sig[1] == 0x4B && (sig[2] == 0x03 || sig[2] == 0x05)) {
+                        is_zip = true;
+                    }
+                }
+                std::fclose(test_fp);
+            }
+        }
+
+        if (is_zip) {
+            char tmp_path[] = "/tmp/imu_eval_XXXXXX.csv";
+            int fd = mkstemps(tmp_path, 4);
+            if (fd >= 0) {
+                close(fd);
+            } else {
+                std::snprintf(tmp_path, sizeof(tmp_path), "/tmp/imu_eval_%d.csv", static_cast<int>(getpid()));
+            }
+
+            char cmd[2048];
+            // Extract imu0/data.csv or *data.csv from the zip archive into temp CSV
+            std::snprintf(cmd, sizeof(cmd), "unzip -p '%s' '*imu0/data.csv' > '%s' 2>/dev/null",
+                          raw_input_path, tmp_path);
+            int ret = std::system(cmd);
+
+            struct stat st_zip;
+            if (ret != 0 || stat(tmp_path, &st_zip) != 0 || st_zip.st_size == 0) {
+                std::snprintf(cmd, sizeof(cmd), "unzip -p '%s' '*data.csv' > '%s' 2>/dev/null",
+                              raw_input_path, tmp_path);
+                std::system(cmd);
+            }
+
+            if (stat(tmp_path, &st_zip) == 0 && st_zip.st_size > 0) {
+                std::snprintf(resolved_input, sizeof(resolved_input), "%s", tmp_path);
+                std::snprintf(temp_extracted_file, sizeof(temp_extracted_file), "%s", tmp_path);
+            }
+        }
     }
 
     AblationMode mode = parse_ablation_mode(ablation_mode);
-    return run_pipeline(resolved_input, output_path, mode, append_blind);
+    int status = run_pipeline(resolved_input, output_path, mode, append_blind);
+
+    if (temp_extracted_file[0] != '\0') {
+        std::remove(temp_extracted_file);
+    }
+    return status;
 }
