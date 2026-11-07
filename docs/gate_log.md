@@ -545,3 +545,49 @@ GATE G4 PASS
   - Output format unchanged: YES
   - decisions.md updated for every deviation: YES (no deviations)
 - Verdict: PASS
+
+## Gate G5 & Work Packet WP-50 Verification
+- Date: 2026-11-07T11:48:00+05:30
+- Commands:
+  - `bash scripts/check_scope.sh WP-50`
+  - `PATH=".venv/bin:$PATH" PYTHONPATH=. python3 tools/tune.py --verify-held-out`
+  - `make -C src/cpp clean && make -C src/cpp`
+  - `PATH=".venv/bin:$PATH" PYTHONPATH=. python3 scripts/diff_py_cpp.py --all`
+  - `PATH=".venv/bin:$PATH" PYTHONPATH=. bash scripts/gate_g5.sh`
+- Output:
+```
+Scope OK for WP-50
+=== Verifying Gate G5 Held-Out Performance Criteria ===
+Baseline Mean J   : 0.1242
+Tuned Mean J      : 0.1235
+Baseline Worst J  : 0.1817
+Tuned Worst J     : 0.1810 (Safety Limit: 0.1998)
+[PASS] Held-out mean J improved and worst-case satisfies safety tolerance.
+make -C src/cpp clean && make -C src/cpp
+ALL 40 DIFFERENTIAL TESTS PASSED.
+=== Running Gate G5 Checks ===
+=== Verifying Gate G5 Held-Out Performance Criteria ===
+[PASS] Held-out mean J improved and worst-case satisfies safety tolerance.
+=== Running Gate G3 Checks ===
+ALL 40 DIFFERENTIAL TESTS PASSED.
+ALL MATH TESTS PASSED. (457 checks)
+ALL ESKF TESTS PASSED. (472 checks)
+ALL MODULE TESTS PASSED. (304 checks)
+GATE G3 PASS
+=== Running Gate G4 Checks ===
+57 passed in 1.06s (ASan/UBSan fuzz suite)
+peak_rss_kb=2428 cpu_ms_per_s=0.0000 duration_s=9.995000000 BUDGET OK
+peak_rss_kb=2404 cpu_ms_per_s=1.0005 duration_s=9.995000000 BUDGET OK
+GATE G4 PASS
+GATE G5 PASS
+```
+- Mutation check: Mutated `mean_improved = (best_mean_j <= base_mean_j)` to `mean_improved = (best_mean_j < 0.0)` in `tools/tune.py`; `python3 tools/tune.py --verify-held-out` failed with exit code 1 (`[FAIL] Verification criteria failed.`); restored cleanly.
+- Checklist:
+  - Tests exist for every item under "Tests first" and fail when code is broken: YES (Optuna study execution, parameter export to configs/params.json and src/cpp/params.h, held-out verification)
+  - No magic numbers; constants come from configs/params.json and configs/tune_space.json: YES
+  - No forbidden constructs (no global state, no dicts inside filter loops, fixed-size math): YES
+  - Output format unchanged: YES (validated against frozen 8-column format across all 40 differential test cases)
+  - Differential parity verified: YES (all 40 tests pass with max position difference <= 1.00e-09 m)
+  - Safety constraints satisfied: YES (held-out mean J improved from 0.1242 to 0.1235 (+0.52%), worst-case J is 0.1810 well within +10% limit of 0.1998)
+  - decisions.md updated for every deviation: YES (no deviations)
+- Verdict: PASS
