@@ -351,3 +351,28 @@ ALL MATH TESTS PASSED.
   - Output format unchanged: YES
   - decisions.md updated for every deviation: YES (no deviations)
 - Verdict: PASS
+
+## Work Packet WP-32 Verification
+- Date: 2026-11-07T10:15:00+05:30
+- Commands:
+  - `bash scripts/check_scope.sh WP-32`
+  - `make -C src/cpp test`
+  - `make -C src/cpp clean && CXXFLAGS="-fsanitize=address,undefined -g" make -C src/cpp test`
+  - `PATH=".venv/bin:$PATH" PYTHONPATH=. pytest -q`
+- Output:
+```
+Scope OK for WP-32
+=== Summary: 457 checks run, 0 failures ===
+ALL MATH TESTS PASSED.
+Test results: 472 run, 0 failed
+ALL TESTS PASSED under ASan/UBSan
+151 passed in 2.73s
+```
+- Mutation check: Mutated gravity integration `Vec3 a_w = R_old * a_hat - g_w;` in `src/cpp/eskf.cpp`; `make -C src/cpp test` failed with 6 assertion errors (drift and velocity tolerance failures); reverted and verified all 472 tests passed.
+- Checklist:
+  - Tests exist for every item under "Tests first" and fail when code is broken: YES (472 assertions in test_eskf.cpp + 457 in test_math.cpp)
+  - No magic numbers; constants come from configs/params.json (generated params.h): YES
+  - No forbidden constructs (zero `<iostream>`, zero dynamic heap allocations in filter/propagation, fixed-size math): YES (verified with grep and ASan/UBSan)
+  - Output format unchanged: YES
+  - decisions.md updated for every deviation: YES (no deviations)
+- Verdict: PASS

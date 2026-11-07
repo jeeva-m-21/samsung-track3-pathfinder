@@ -1,5 +1,5 @@
 # STATE
-Updated: 2026-11-07T09:55:00+05:30 by Reviewer
+Updated: 2026-11-07T10:17:00+05:30 by Reviewer
 Current phase: P3
 Last passed gate: G2
 
@@ -24,7 +24,7 @@ Last passed gate: G2
 | WP-28 | DONE | Estimator | 0 | Full pipeline & ablations verified, Gate G2 PASS, reviewed |
 | WP-30 | DONE | CppPort | 0 | C++ skeleton, buffered stdio parser/writer, params.h verified PASS |
 | WP-31 | DONE | CppPort | 0 | mat.h, quat.h fixed-size math + C++ unit tests verified PASS |
-| WP-32 | REVIEW | CppPort | 0 | Port init, strapdown, ESKF predict verified PASS |
+| WP-32 | DONE | CppPort | 0 | Init, strapdown, ESKF predict verified PASS |
 | WP-33 | TODO | CppPort | 0 | Port updates, monitor, gap, blind |
 | WP-34 | TODO | CppPort | 0 | scripts/diff_py_cpp.py and full differential test |
 | WP-35 | TODO | CppPort | 0 | Performance pass if budgets missed |
