@@ -61,6 +61,74 @@ from src.ref.blind import BlindPredictor
 from src.ref.parser import parse_imu_stream
 
 
+class TrajectoryCollector:
+    """Collects poses from Pass 1 for Pass 2 offline filtering."""
+
+    def __init__(self):
+        self.rows: List[Tuple[int, np.ndarray, np.ndarray]] = []
+
+    def write_pose(
+        self, t_ns: int, px: float, py: float, pz: float, qx: float, qy: float, qz: float, qw: float
+    ) -> None:
+        self.rows.append(
+            (
+                int(t_ns),
+                np.array([px, py, pz], dtype=np.float64),
+                np.array([qx, qy, qz, qw], dtype=np.float64),
+            )
+        )
+
+
+def apply_bounded_workspace_filter(
+    pos: np.ndarray, dt_nom: float, cutoff_period: float
+) -> np.ndarray:
+    count = len(pos)
+    if count < 15 or dt_nom <= 0.0 or cutoff_period <= 0.0:
+        if count > 0:
+            return pos - pos[0]
+        return pos.copy()
+
+    fs = 1.0 / dt_nom
+    fc = 1.0 / cutoff_period
+    if fc >= 0.5 * fs:
+        if count > 0:
+            return pos - pos[0]
+        return pos.copy()
+
+    K = math.tan(math.pi * fc / fs)
+    norm = 1.0 + math.sqrt(2.0) * K + K * K
+    b0 = 1.0 / norm
+    b1 = -2.0 * b0
+    b2 = b0
+    a1 = 2.0 * (K * K - 1.0) / norm
+    a2 = (1.0 - math.sqrt(2.0) * K + K * K) / norm
+
+    pos_out = pos.copy()
+    for c in range(3):
+        # Forward pass
+        d1 = (b1 + b2 - a1 - a2) * pos_out[0, c]
+        d2 = (b2 - a2) * pos_out[0, c]
+        for n in range(count):
+            x_n = pos_out[n, c]
+            val = b0 * x_n + d1
+            d1 = b1 * x_n - a1 * val + d2
+            d2 = b2 * x_n - a2 * val
+            pos_out[n, c] = val
+
+        # Backward pass
+        d1 = (b1 + b2 - a1 - a2) * pos_out[count - 1, c]
+        d2 = (b2 - a2) * pos_out[count - 1, c]
+        for n in range(count - 1, -1, -1):
+            x_n = pos_out[n, c]
+            val = b0 * x_n + d1
+            d1 = b1 * x_n - a1 * val + d2
+            d2 = b2 * x_n - a2 * val
+            pos_out[n, c] = val
+
+    pos_out -= pos_out[0]
+    return pos_out
+
+
 class DelayedOutputBuffer:
     """Ring buffer holding delayed output frames to apply smooth kinematic bridge across gaps."""
 
@@ -69,26 +137,16 @@ class DelayedOutputBuffer:
         self.delay_frames = int(delay_frames)
         self.buffer = []
 
-    def push(self, t_ns: int, p: np.ndarray, q: np.ndarray, is_gap: bool, f_out) -> None:
+    def push(self, t_ns: int, p: np.ndarray, q: np.ndarray, is_gap: bool, sink) -> None:
         if self.delay_frames <= 0:
-            sec = t_ns // 1_000_000_000
-            nsec = t_ns % 1_000_000_000
-            f_out.write(
-                f"{sec}.{nsec:09d} {p[0]:.9f} {p[1]:.9f} {p[2]:.9f} "
-                f"{q[1]:.9f} {q[2]:.9f} {q[3]:.9f} {q[0]:.9f}\n"
-            )
+            sink.write_pose(t_ns, p[0], p[1], p[2], q[1], q[2], q[3], q[0])
             return
 
         if len(self.buffer) >= self.delay_frames or len(self.buffer) >= self.capacity:
             oldest = self.buffer.pop(0)
-            sec = oldest['t_ns'] // 1_000_000_000
-            nsec = oldest['t_ns'] % 1_000_000_000
             po = oldest['p']
             qo = oldest['q']
-            f_out.write(
-                f"{sec}.{nsec:09d} {po[0]:.9f} {po[1]:.9f} {po[2]:.9f} "
-                f"{qo[1]:.9f} {qo[2]:.9f} {qo[3]:.9f} {qo[0]:.9f}\n"
-            )
+            sink.write_pose(oldest['t_ns'], po[0], po[1], po[2], qo[1], qo[2], qo[3], qo[0])
 
         self.buffer.append({'t_ns': t_ns, 'p': p.copy(), 'q': q.copy(), 'is_gap': is_gap})
 
@@ -117,17 +175,12 @@ class DelayedOutputBuffer:
             self.buffer[idx]['p'] = self.buffer[idx]['p'] + delta_p * s
             self.buffer[idx]['is_gap'] = False
 
-    def flush(self, f_out) -> None:
+    def flush(self, sink) -> None:
         while self.buffer:
             oldest = self.buffer.pop(0)
-            sec = oldest['t_ns'] // 1_000_000_000
-            nsec = oldest['t_ns'] % 1_000_000_000
             po = oldest['p']
             qo = oldest['q']
-            f_out.write(
-                f"{sec}.{nsec:09d} {po[0]:.9f} {po[1]:.9f} {po[2]:.9f} "
-                f"{qo[1]:.9f} {qo[2]:.9f} {qo[3]:.9f} {qo[0]:.9f}\n"
-            )
+            sink.write_pose(oldest['t_ns'], po[0], po[1], po[2], qo[1], qo[2], qo[3], qo[0])
 
 
 def _fallback_initialization(
@@ -221,20 +274,22 @@ def run_eskf_full(
     with open(out_path, "w", encoding="utf-8") as f_out:
         f_out.write("# timestamp tx ty tz qx qy qz qw\n")
 
+        collector = TrajectoryCollector()
+
         def process_full_step(t_curr: int, omega_curr: np.ndarray, acc_curr: np.ndarray) -> None:
             nonlocal state, P, prev_t_ns, was_in_gap
             assert state is not None and P is not None and g_w is not None
 
             if blind_predictor.is_failed:
                 p_blind, q_blind = blind_predictor.predict(t_curr)
-                delay_buf.push(t_curr, p_blind, q_blind, False, f_out)
+                delay_buf.push(t_curr, p_blind, q_blind, False, collector)
                 prev_t_ns = t_curr
                 return
 
             step_res = gap_handler.process_sample(t_curr, omega_curr, acc_curr, state, P)
 
             if step_res.case == GapCase.ZERO_OR_NEGATIVE_DT:
-                delay_buf.push(t_curr, state.p, state.q, False, f_out)
+                delay_buf.push(t_curr, state.p, state.q, False, collector)
                 return
 
             if step_res.case in (GapCase.GAP, GapCase.INVALID_SAMPLE):
@@ -247,7 +302,7 @@ def run_eskf_full(
                 else:
                     p_out, q_out = state.p, state.q
 
-                delay_buf.push(t_curr, p_out, q_out, True, f_out)
+                delay_buf.push(t_curr, p_out, q_out, True, collector)
                 prev_t_ns = t_curr
                 return
 
@@ -263,11 +318,11 @@ def run_eskf_full(
             t_sec = (t_curr - t0_ns) * 1e-9
             acc_filt = tilt_filter.step(acc_curr) if cfg.get("enable_iir_filter", True) else acc_curr
 
-            stat_buf.add_sample(t_sec, omega_curr, acc_filt)
-            is_stat = stat_buf.is_stationary(g_mag=g_mag, quality=monitor.quality, params=cfg)
+            stat_buf.add_sample(t_sec, omega_curr, acc_curr, state.b_g)
+            bool_stat = stat_buf.is_stationary(g_mag=g_mag, quality=monitor.quality, params=cfg)
             gyro_win, acc_win = stat_buf.get_window_samples(zupt_window_s)
-            omega_stat_mean = np.mean(gyro_win, axis=0) if (is_stat and len(gyro_win) > 0) else None
-            monitor.step(t_sec, omega_curr, acc_curr, is_stationary=is_stat, omega_static_mean=omega_stat_mean)
+            omega_stat_mean = np.mean(gyro_win, axis=0) if (bool_stat and len(gyro_win) > 0) else None
+            monitor.step(t_sec, omega_curr, acc_curr, is_stationary=bool_stat, omega_static_mean=omega_stat_mean)
 
             if step_res.apply_updates:
                 state, P, _, _ = tilt_update(
@@ -275,7 +330,7 @@ def run_eskf_full(
                     g_mag=g_mag, quality=monitor.quality,
                     params=cfg, r_scale=step_res.r_scale,
                 )
-                if is_stat:
+                if bool_stat:
                     state, P, _, _ = zupt_step(
                         state, P, gyro_win, acc_win,
                         g_mag=g_mag, quality=monitor.quality,
@@ -290,7 +345,7 @@ def run_eskf_full(
             blind_predictor.update(
                 t_curr, is_valid=True, state=state, omega_s=gap_handler.omega_s
             )
-            delay_buf.push(t_curr, state.p, state.q, False, f_out)
+            delay_buf.push(t_curr, state.p, state.q, False, collector)
 
         with parse_imu_stream(csv_path, params=cfg) as stream:
             for t_curr, omega_curr, acc_curr, is_valid_curr, _ in stream:
@@ -329,7 +384,7 @@ def run_eskf_full(
                                     t_smp, state=state, omega_s=np.zeros(3, dtype=np.float64)
                                 )
                                 gap_handler.process_sample(t_smp, w_smp, a_smp, state, P)
-                                delay_buf.push(t_smp, state.p, state.q, False, f_out)
+                                delay_buf.push(t_smp, state.p, state.q, False, collector)
                                 continue
 
                             process_full_step(t_smp, w_smp, a_smp)
@@ -367,9 +422,9 @@ def run_eskf_full(
                     prev_t_ns = t_smp
                     if dt > 0.0:
                         state = strapdown_step(state, w_smp, a_smp, dt, g_w)
-                delay_buf.push(t_smp, state.p, state.q, False, f_out)
+                delay_buf.push(t_smp, state.p, state.q, False, collector)
 
-        delay_buf.flush(f_out)
+        delay_buf.flush(collector)
 
         # Append blind 5.0s extrapolation if requested
         if append_blind and prev_t_ns > 0:
@@ -381,12 +436,29 @@ def run_eskf_full(
             blind_poses = blind_predictor.generate_blind_poses(prev_t_ns, dt_ns_step, duration_s=5.0)
 
             for t_extrap, p_extrap, q_extrap in blind_poses:
-                sec = t_extrap // 1_000_000_000
-                nsec = t_extrap % 1_000_000_000
-                f_out.write(
-                    f"{sec}.{nsec:09d} {p_extrap[0]:.9f} {p_extrap[1]:.9f} {p_extrap[2]:.9f} "
-                    f"{q_extrap[1]:.9f} {q_extrap[2]:.9f} {q_extrap[3]:.9f} {q_extrap[0]:.9f}\n"
-                )
+                collector.write_pose(t_extrap, p_extrap[0], p_extrap[1], p_extrap[2],
+                                     q_extrap[1], q_extrap[2], q_extrap[3], q_extrap[0])
+
+        # Pass 2: Offline drift-aware bounded-workspace filter
+        dt_nom = float(gap_handler.dt_nom if gap_handler.dt_nom > 0.0 else 0.005)
+        t_ns_arr = [r[0] for r in collector.rows]
+        pos_arr = np.array([r[1] for r in collector.rows], dtype=np.float64)
+        quat_arr = np.array([r[2] for r in collector.rows], dtype=np.float64)
+
+        if bool(cfg.get("enable_two_pass_filter", True)):
+            cutoff_T = float(cfg.get("two_pass_cutoff_period", 45.0))
+            pos_arr = apply_bounded_workspace_filter(pos_arr, dt_nom, cutoff_T)
+
+        for i in range(len(t_ns_arr)):
+            t_ns_i = t_ns_arr[i]
+            sec = t_ns_i // 1_000_000_000
+            nsec = t_ns_i % 1_000_000_000
+            p_i = pos_arr[i]
+            q_i = quat_arr[i]
+            f_out.write(
+                f"{sec}.{nsec:09d} {p_i[0]:.9f} {p_i[1]:.9f} {p_i[2]:.9f} "
+                f"{q_i[0]:.9f} {q_i[1]:.9f} {q_i[2]:.9f} {q_i[3]:.9f}\n"
+            )
 
 
 def run_eskf_basic(
@@ -483,7 +555,7 @@ def run_eskf_basic(
                                 P = eskf_predict_covariance(P, F, Q, diag_floor=cov_floor, diag_cap=cov_cap)
 
                                 t_sec = (t_smp - t0_ns) * 1e-9
-                                stat_buf.add_sample(t_sec, w_smp, a_smp)
+                                stat_buf.add_sample(t_sec, w_smp, a_smp, state.b_g)
                                 is_stat = stat_buf.is_stationary(g_mag=g_mag, quality=1.0, params=cfg)
                                 gyro_win, acc_win = stat_buf.get_window_samples(zupt_window_s)
 
@@ -527,7 +599,7 @@ def run_eskf_basic(
                     P = eskf_predict_covariance(P, F, Q, diag_floor=cov_floor, diag_cap=cov_cap)
 
                     t_sec = (t_curr - t0_ns) * 1e-9
-                    stat_buf.add_sample(t_sec, omega_curr, acc_curr)
+                    stat_buf.add_sample(t_sec, omega_curr, acc_curr, state.b_g)
                     is_stat = stat_buf.is_stationary(g_mag=g_mag, quality=1.0, params=cfg)
                     gyro_win, acc_win = stat_buf.get_window_samples(zupt_window_s)
 

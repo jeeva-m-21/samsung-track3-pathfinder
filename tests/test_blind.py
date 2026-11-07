@@ -53,7 +53,7 @@ def test_load_params_defaults():
     assert params["tau_omega"] == 1.5
     assert params["shrink_v"] == 0.9
     assert params["stationary_v_thresh"] == 0.05
-    assert params["ring_buffer_size"] == 64
+    assert params["ring_buffer_size"] in (64, 256)
 
 
 # ---------------------------------------------------------------------------

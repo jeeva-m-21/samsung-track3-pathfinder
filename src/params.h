@@ -40,20 +40,20 @@ constexpr double zupt_acc_dev = 0.15;
 constexpr double zupt_sigma = 0.01427568922533429;
 constexpr double zupt_min_quality = 0.3;
 constexpr double monitor_alpha = 0.01;
-constexpr double kappa_max = 19.286893806116556;
+constexpr double kappa_max = 50.0;
 constexpr double sigma_bgm = 0.005;
 constexpr double invalid_gyro_max = 35.0;
 constexpr double invalid_acc_max = 160.0;
 constexpr int64_t gap_substep_max = 800;
-constexpr double tau_gap = 6.976170791903409;
+constexpr double tau_gap = 2.0;
 constexpr double kappa_gap = 5.0;
-constexpr int64_t recover_steps = 206;
+constexpr int64_t recover_steps = 100;
 constexpr double T_fail = 1.0;
 constexpr double smooth_omega_tau = 0.25;
 constexpr int64_t ring_buffer_size = 256;
-constexpr double tau_v = 6.813634740992689;
-constexpr double tau_omega = 1.5366218824583369;
-constexpr double shrink_v = 0.9874064157466331;
+constexpr double tau_v = 3.0;
+constexpr double tau_omega = 1.5;
+constexpr double shrink_v = 0.9;
 constexpr double stationary_v_thresh = 0.05;
 constexpr bool enable_iir_filter = true;
 constexpr double iir_cutoff_hz = 14.0;
@@ -61,6 +61,8 @@ constexpr bool enable_velocity_bounding = true;
 constexpr double max_velocity_mps = 3.0;
 constexpr double velocity_bounding_sigma = 0.2;
 constexpr int64_t delayed_output_frames = 512;
+constexpr bool enable_two_pass_filter = true;
+constexpr double two_pass_cutoff_period = 45.0;
 
 } // namespace params
 

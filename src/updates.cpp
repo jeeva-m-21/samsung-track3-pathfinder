@@ -131,10 +131,10 @@ void StationaryBuffer::clear() {
     acc_filter_.initialized = false;
 }
 
-void StationaryBuffer::add_sample(double t, const Vec3& omega, const Vec3& acc) {
+void StationaryBuffer::add_sample(double t, const Vec3& omega, const Vec3& acc, const Vec3& b_g) {
     timestamps_[head_] = t;
-    gyro_[head_] = omega;
-    acc_[head_] = acc;
+    gyro_[head_] = omega - b_g;
+    acc_[head_] = acc_filter_.step(acc);
 
     head_ = (head_ + 1) % CAPACITY;
     if (count_ < CAPACITY) {
@@ -274,6 +274,11 @@ bool apply_velocity_bounding(NominalState& state,
     if (v_mag <= max_speed || v_mag < 1e-12) {
         return false;
     }
+
+    // Decouple P_pv and P_vp cross-covariance blocks so velocity bounding
+    // pseudo-measurement does not inject unphysical position jumps/kicks
+    P.set_block<3, 3>(6, 3, Mat3::zeros());
+    P.set_block<3, 3>(3, 6, Mat3::zeros());
 
     Vec3 target_v = state.v * (max_speed / v_mag);
     Vec3 y = target_v - state.v;

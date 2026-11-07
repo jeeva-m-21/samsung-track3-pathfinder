@@ -69,7 +69,7 @@ public:
 
     StationaryBuffer();
     void clear();
-    void add_sample(double t, const Vec3& omega, const Vec3& acc);
+    void add_sample(double t, const Vec3& omega, const Vec3& acc, const Vec3& b_g = math::make_vec3(0.0, 0.0, 0.0));
     bool is_stationary(double g_mag = 9.80665,
                        double quality = 1.0,
                        double window_s = params::zupt_window_s) const;

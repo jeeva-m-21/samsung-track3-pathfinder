@@ -482,18 +482,24 @@ class StationaryWindowBuffer:
         t: float,
         omega: Union[np.ndarray, list],
         acc: Union[np.ndarray, list],
+        b_g: Optional[Union[np.ndarray, list]] = None,
     ) -> None:
-        """Add a sample to circular ring buffer.
+        """Add a sample to circular ring buffer with gyro bias subtraction and accel filtering.
 
         Args:
             t: Sample timestamp in seconds.
             omega: (3,) gyroscope measurement [rad/s].
             acc: (3,) accelerometer measurement [m/s^2].
+            b_g: Optional (3,) estimated gyro bias [rad/s].
         """
         idx = self.head
         self.timestamps[idx] = float(t)
-        self.gyro[idx, :] = np.asarray(omega, dtype=np.float64).reshape(3)
-        self.acc[idx, :] = np.asarray(acc, dtype=np.float64).reshape(3)
+        omega_arr = np.asarray(omega, dtype=np.float64).reshape(3)
+        acc_arr = np.asarray(acc, dtype=np.float64).reshape(3)
+        bg_arr = np.zeros(3, dtype=np.float64) if b_g is None else np.asarray(b_g, dtype=np.float64).reshape(3)
+
+        self.gyro[idx, :] = omega_arr - bg_arr
+        self.acc[idx, :] = self.acc_filter.step(acc_arr)
 
         self.head = (idx + 1) % self.capacity
         if self.count < self.capacity:
@@ -637,10 +643,16 @@ def apply_velocity_bounding(
     target_v = v * (limit / v_norm)
     y_v = target_v - v
 
+    # Decouple P_pv and P_vp cross-covariance blocks so velocity bounding
+    # pseudo-measurement does not inject unphysical position jumps/kicks
+    P_decoupled = P.copy()
+    P_decoupled[6:9, 3:6] = 0.0
+    P_decoupled[3:6, 6:9] = 0.0
+
     H_v = np.zeros((3, 15), dtype=np.float64)
     H_v[0:3, 3:6] = np.eye(3, dtype=np.float64)
     R_v = (sig ** 2) * np.eye(3, dtype=np.float64)
 
-    updated_state, updated_P, _ = eskf_measurement_update(state, P, H_v, y_v, R_v)
+    updated_state, updated_P, _ = eskf_measurement_update(state, P_decoupled, H_v, y_v, R_v)
     return updated_state, updated_P, True
 

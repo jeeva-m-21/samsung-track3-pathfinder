@@ -25,6 +25,102 @@ struct DelayedPose {
     bool is_gap;
 };
 
+static constexpr size_t MAX_TRAJECTORY_SAMPLES = 60000;
+static Vec3 s_pos_pass1[MAX_TRAJECTORY_SAMPLES];
+
+struct TrajectoryCollector {
+    FILE* tmp_file;
+    size_t count;
+
+    struct Record {
+        int64_t t_ns;
+        double qx, qy, qz, qw;
+    };
+
+    TrajectoryCollector() : tmp_file(std::tmpfile()), count(0) {}
+    ~TrajectoryCollector() {
+        if (tmp_file) {
+            std::fclose(tmp_file);
+        }
+    }
+
+    void write_pose(int64_t t_ns, double px, double py, double pz, double qx, double qy, double qz, double qw) {
+        if (count < MAX_TRAJECTORY_SAMPLES) {
+            s_pos_pass1[count] = math::make_vec3(px, py, pz);
+            count++;
+        }
+        if (tmp_file) {
+            Record rec{ t_ns, qx, qy, qz, qw };
+            std::fwrite(&rec, sizeof(Record), 1, tmp_file);
+        }
+    }
+};
+
+void apply_bounded_workspace_filter(Vec3* pos, size_t count, double dt_nom, double cutoff_period) {
+    if (count < 15 || dt_nom <= 0.0 || cutoff_period <= 0.0) {
+        if (count > 0) {
+            Vec3 p0 = pos[0];
+            for (size_t i = 0; i < count; ++i) {
+                pos[i] = pos[i] - p0;
+            }
+        }
+        return;
+    }
+
+    double fs = 1.0 / dt_nom;
+    double fc = 1.0 / cutoff_period;
+    if (fc >= 0.5 * fs) {
+        if (count > 0) {
+            Vec3 p0 = pos[0];
+            for (size_t i = 0; i < count; ++i) {
+                pos[i] = pos[i] - p0;
+            }
+        }
+        return;
+    }
+
+    constexpr double PI_VAL = 3.14159265358979323846;
+    double K = std::tan(PI_VAL * fc / fs);
+    double norm = 1.0 + std::sqrt(2.0) * K + K * K;
+    double b0 = 1.0 / norm;
+    double b1 = -2.0 * b0;
+    double b2 = b0;
+    double a1 = 2.0 * (K * K - 1.0) / norm;
+    double a2 = (1.0 - std::sqrt(2.0) * K + K * K) / norm;
+
+    // Filter each coordinate x, y, z independently
+    for (int c = 0; c < 3; ++c) {
+        // Forward pass
+        double d1 = (b1 + b2 - a1 - a2) * pos[0].data[c];
+        double d2 = (b2 - a2) * pos[0].data[c];
+        for (size_t n = 0; n < count; ++n) {
+            double x_n = pos[n].data[c];
+            double val = b0 * x_n + d1;
+            d1 = b1 * x_n - a1 * val + d2;
+            d2 = b2 * x_n - a2 * val;
+            pos[n].data[c] = val;
+        }
+
+        // Backward pass
+        d1 = (b1 + b2 - a1 - a2) * pos[count - 1].data[c];
+        d2 = (b2 - a2) * pos[count - 1].data[c];
+        for (size_t i = 0; i < count; ++i) {
+            size_t n = count - 1 - i;
+            double x_n = pos[n].data[c];
+            double val = b0 * x_n + d1;
+            d1 = b1 * x_n - a1 * val + d2;
+            d2 = b2 * x_n - a2 * val;
+            pos[n].data[c] = val;
+        }
+    }
+
+    // Ensure strict start at p(0) = 0
+    Vec3 p0 = pos[0];
+    for (size_t i = 0; i < count; ++i) {
+        pos[i] = pos[i] - p0;
+    }
+}
+
 class DelayedOutputBuffer {
 public:
     static constexpr size_t CAPACITY = 512;
@@ -37,7 +133,8 @@ public:
         count_ = 0;
     }
 
-    void push(int64_t t_ns, const Vec3& p, const Quat& q, bool is_gap, io::TrajectoryWriter& writer) {
+    template<typename WriterType>
+    void push(int64_t t_ns, const Vec3& p, const Quat& q, bool is_gap, WriterType& writer) {
         if (params::delayed_output_frames <= 0) {
             writer.write_pose(t_ns, p.data[0], p.data[1], p.data[2], q.x, q.y, q.z, q.w);
             return;
@@ -85,7 +182,8 @@ public:
         }
     }
 
-    void flush(io::TrajectoryWriter& writer) {
+    template<typename WriterType>
+    void flush(WriterType& writer) {
         while (count_ > 0) {
             const auto& oldest = buffer_[tail_];
             writer.write_pose(oldest.t_ns, oldest.p.data[0], oldest.p.data[1], oldest.p.data[2],
@@ -631,7 +729,7 @@ int run_eskf_basic(const char* input_path,
                         P = propagate_covariance(P, F, Q);
 
                         double t_sec = static_cast<double>(t_smp - t0_ns) * 1e-9;
-                        stat_buf.add_sample(t_sec, w_smp, a_smp);
+                        stat_buf.add_sample(t_sec, w_smp, a_smp, state.b_g);
                         bool is_stat = stat_buf.is_stationary(g_mag, 1.0, params::zupt_window_s);
 
                         apply_tilt_update(state, P, a_smp, w_smp, 1.0, g_w, 1e9, 1.0);
@@ -665,7 +763,7 @@ int run_eskf_basic(const char* input_path,
             P = propagate_covariance(P, F, Q);
 
             double t_sec = static_cast<double>(t_curr - t0_ns) * 1e-9;
-            stat_buf.add_sample(t_sec, w_curr, acc_curr);
+            stat_buf.add_sample(t_sec, w_curr, acc_curr, state.b_g);
             bool is_stat = stat_buf.is_stationary(g_mag, 1.0, params::zupt_window_s);
 
             apply_tilt_update(state, P, acc_curr, w_curr, 1.0, g_w, 1e9, 1.0);
@@ -756,6 +854,8 @@ int run_eskf_full(const char* input_path,
     int64_t t0_ns = 0;
     int64_t prev_t_ns = 0;
 
+    TrajectoryCollector collector;
+
     auto process_full_step = [&](int64_t t_curr,
                                  const Vec3& omega_curr,
                                  const Vec3& acc_curr) {
@@ -763,7 +863,7 @@ int run_eskf_full(const char* input_path,
             Vec3 p_blind;
             Quat q_blind;
             blind_predictor.predict(t_curr, p_blind, q_blind);
-            delay_buf.push(t_curr, p_blind, q_blind, false, writer);
+            delay_buf.push(t_curr, p_blind, q_blind, false, collector);
             prev_t_ns = t_curr;
             return;
         }
@@ -771,7 +871,7 @@ int run_eskf_full(const char* input_path,
         GapStepResult step_res = gap_handler.process_sample(t_curr, omega_curr, acc_curr, state, P);
 
         if (step_res.gap_case == GapCase::ZERO_OR_NEGATIVE_DT) {
-            delay_buf.push(t_curr, state.p, state.q, false, writer);
+            delay_buf.push(t_curr, state.p, state.q, false, collector);
             return;
         }
 
@@ -785,7 +885,7 @@ int run_eskf_full(const char* input_path,
             if (failed || blind_predictor.is_failed()) {
                 blind_predictor.predict(t_curr, p_out, q_out);
             }
-            delay_buf.push(t_curr, p_out, q_out, true, writer);
+            delay_buf.push(t_curr, p_out, q_out, true, collector);
             prev_t_ns = t_curr;
             return;
         }
@@ -803,7 +903,7 @@ int run_eskf_full(const char* input_path,
         double t_sec = static_cast<double>(t_curr - t0_ns) * 1e-9;
         Vec3 acc_filt = params::enable_iir_filter ? tilt_filter.step(acc_curr) : acc_curr;
 
-        stat_buf.add_sample(t_sec, omega_curr, acc_filt);
+        stat_buf.add_sample(t_sec, omega_curr, acc_curr, state.b_g);
         bool is_stat = stat_buf.is_stationary(g_mag, monitor.quality(), params::zupt_window_s);
         Vec3 omega_stat_mean = stat_buf.get_mean_gyro(params::zupt_window_s);
         monitor.step(t_sec, omega_curr, acc_curr, is_stat, is_stat ? &omega_stat_mean : nullptr);
@@ -822,7 +922,7 @@ int run_eskf_full(const char* input_path,
         }
 
         blind_predictor.update(t_curr, true, state.p, state.v, state.q, gap_handler.omega_s());
-        delay_buf.push(t_curr, state.p, state.q, false, writer);
+        delay_buf.push(t_curr, state.p, state.q, false, collector);
     };
 
     while (reader.next(sample)) {
@@ -860,7 +960,7 @@ int run_eskf_full(const char* input_path,
                                                               math::make_vec3(0.0, 0.0, 0.0));
                         gap_handler.process_sample(t_smp, w_smp, a_smp, state, P);
 
-                        delay_buf.push(t_smp, state.p, state.q, false, writer);
+                        delay_buf.push(t_smp, state.p, state.q, false, collector);
                         continue;
                     }
 
@@ -889,11 +989,11 @@ int run_eskf_full(const char* input_path,
                     state = strapdown_step(state, s_init_buf[idx].omega, s_init_buf[idx].acc, dt, g_w);
                 }
             }
-            delay_buf.push(t_smp, state.p, state.q, false, writer);
+            delay_buf.push(t_smp, state.p, state.q, false, collector);
         }
     }
 
-    delay_buf.flush(writer);
+    delay_buf.flush(collector);
 
     // Append blind (5.0s extrapolation)
     if (append_blind && prev_t_ns > 0) {
@@ -910,8 +1010,28 @@ int run_eskf_full(const char* input_path,
             Vec3 p_extrap;
             Quat q_extrap;
             blind_predictor.predict(t_extrap, p_extrap, q_extrap);
-            writer.write_pose(t_extrap, p_extrap.data[0], p_extrap.data[1], p_extrap.data[2],
-                              q_extrap.x, q_extrap.y, q_extrap.z, q_extrap.w);
+            collector.write_pose(t_extrap, p_extrap.data[0], p_extrap.data[1], p_extrap.data[2],
+                                 q_extrap.x, q_extrap.y, q_extrap.z, q_extrap.w);
+        }
+    }
+
+    // Pass 2: Offline drift-aware bounded-workspace filter
+    double dt_nom = (gap_handler.dt_nom() > 0.0) ? gap_handler.dt_nom() : 0.005;
+    if (params::enable_two_pass_filter) {
+        apply_bounded_workspace_filter(s_pos_pass1, collector.count, dt_nom, params::two_pass_cutoff_period);
+    }
+
+    if (collector.tmp_file) {
+        std::rewind(collector.tmp_file);
+        for (size_t i = 0; i < collector.count; ++i) {
+            TrajectoryCollector::Record rec;
+            if (std::fread(&rec, sizeof(rec), 1, collector.tmp_file) == 1) {
+                writer.write_pose(rec.t_ns,
+                                  s_pos_pass1[i].data[0],
+                                  s_pos_pass1[i].data[1],
+                                  s_pos_pass1[i].data[2],
+                                  rec.qx, rec.qy, rec.qz, rec.qw);
+            }
         }
     }
 
