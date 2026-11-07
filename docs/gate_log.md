@@ -445,3 +445,35 @@ GATE G3 PASS
   - Determinism satisfied: YES (bit-identical across multiple runs)
   - decisions.md updated for every deviation: YES (no deviations)
 - Verdict: PASS
+
+## Work Packet WP-40 Verification
+- Date: 2026-11-07T11:05:00+05:30
+- Commands:
+  - `bash scripts/check_scope.sh WP-40`
+  - `PATH=".venv/bin:$PATH" PYTHONPATH=. pytest tests/fuzz/ -v`
+  - `PATH=".venv/bin:$PATH" PYTHONPATH=. pytest -q`
+- Output:
+```
+Scope OK for WP-40
+============================= test session starts ==============================
+collected 57 items
+
+tests/fuzz/test_fuzz.py::test_fuzz_case[empty_file] PASSED               [  1%]
+...
+tests/fuzz/test_fuzz.py::test_fuzz_case[large_stream] PASSED             [ 40%]
+tests/fuzz/test_fuzz.py::test_fuzz_ablation_modes[...] PASSED            [ 89%]
+tests/fuzz/test_fuzz.py::test_fuzz_append_blind[...] PASSED               [ 96%]
+tests/fuzz/test_fuzz.py::test_fuzz_cli_rejection PASSED                  [ 98%]
+tests/fuzz/test_fuzz.py::test_fuzz_generator_cli PASSED                  [100%]
+
+============================== 57 passed in 0.45s ==============================
+208 passed in 2.68s
+```
+- Mutation check: Mutated assertion `assert proc.returncode in case.expected_exit_codes` to `assert proc.returncode == 999` in `tests/fuzz/test_fuzz.py`; pytest failed with 23 failures (exit code 1); restored and verified all 57 fuzz tests passed cleanly.
+- Checklist:
+  - Tests exist for every item under "Tests first" and fail when code is broken: YES (57 tests covering 23 adversarial edge cases, all 4 ablation modes, append blind, CLI flag rejection, and CLI generator output)
+  - No magic numbers; constants come from configs/params.json: YES
+  - No forbidden constructs (no global state, no dicts inside filter loops, fixed-size math): YES
+  - Output format unchanged: YES (validated against frozen 8-column format, no NaN/Inf)
+  - decisions.md updated for every deviation: YES (no deviations)
+- Verdict: PASS
