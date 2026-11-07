@@ -8,7 +8,6 @@ main
 src/main
 src/cpp/build/
 *.zip
-estimated_trajectory.txt
 
 # Python & Environment
 __pycache__/
@@ -16,10 +15,3 @@ __pycache__/
 .venv/
 requirements.txt
 results/tmp/
-
-# Internal Agent Logs, Packets & Reports
-.agent/
-docs/
-results/
-PLAN.md
-GEMINI.md
