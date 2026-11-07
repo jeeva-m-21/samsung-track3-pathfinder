@@ -317,3 +317,37 @@ Deterministic output: PASS (bit-identical across runs)
   - Output format unchanged: YES (frozen 8-column format, int64 timestamp formatting preserved)
   - decisions.md updated for every deviation: YES (no deviations)
 - Verdict: PASS
+
+## Work Packet WP-31 Verification
+- Date: 2026-11-07T10:05:00+05:30
+- Commands:
+  - `bash scripts/check_scope.sh WP-31`
+  - `make -C src/cpp test`
+  - `make -C src/cpp clean && CXXFLAGS="-O2 -std=c++17 -Wall -Wextra -Werror -fno-exceptions -fno-rtti -fsanitize=address,undefined -g" make -C src/cpp test`
+  - `PATH=".venv/bin:$PATH" PYTHONPATH=. pytest -q`
+- Output:
+```
+Scope OK for WP-31
+=== Starting C++ Math Unit Tests ===
+Running test_mat3_basic...
+Running test_mat3_inv...
+Running test_mat15_ops...
+Running test_skew...
+Running test_quat_mult_hamilton...
+Running test_quat_normalize...
+Running test_quat_exp_and_log...
+Running test_rot_matrix_cookbook_spec...
+Running test_rot_matrix_shepperd_branches...
+Running test_quat_sign_continuity...
+=== Summary: 457 checks run, 0 failures ===
+ALL MATH TESTS PASSED.
+151 passed in 2.31s
+```
+- Mutation check: Mutated sign in Hamilton product `q * p` in `src/cpp/quat.h` (`w * p.x - x * p.w + y * p.z - z * p.y`); `make -C src/cpp test` failed with 8 assertion errors (`TESTS FAILED! make: *** [Makefile:30: test] Error 1`); restored and verified all 457 tests passed cleanly.
+- Checklist:
+  - Tests exist for every item under "Tests first" and fail when code is broken: YES (457 assertions covering mat.h and quat.h)
+  - No magic numbers; constants come from configs/params.json: YES (only standard numerical epsilon/tolerances)
+  - No forbidden constructs (zero `<iostream>`, zero heap allocations / malloc / new / std::vector): YES (verified by grep and ASan/UBSan build)
+  - Output format unchanged: YES
+  - decisions.md updated for every deviation: YES (no deviations)
+- Verdict: PASS
