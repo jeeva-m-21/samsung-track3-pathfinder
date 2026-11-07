@@ -5,9 +5,9 @@ LDFLAGS ?=
 BUILD_DIR := build
 TARGET := $(BUILD_DIR)/main
 
-SRCS := main.cpp io.cpp init.cpp eskf.cpp updates.cpp monitor.cpp gap.cpp blind.cpp
+SRCS := main.cpp io.cpp init.cpp eskf.cpp updates.cpp monitor.cpp gap.cpp blind.cpp pipeline.cpp
 OBJS := $(patsubst %.cpp,$(BUILD_DIR)/%.o,$(SRCS))
-DEPS := io.h params.h mat.h quat.h init.h eskf.h updates.h monitor.h gap.h blind.h
+DEPS := io.h params.h mat.h quat.h init.h eskf.h updates.h monitor.h gap.h blind.h pipeline.h
 
 REPO_ROOT := $(abspath ../..)
 TEST_MATH_SRC := $(REPO_ROOT)/tests/cpp/test_math.cpp
