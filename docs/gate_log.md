@@ -591,3 +591,53 @@ GATE G5 PASS
   - Safety constraints satisfied: YES (held-out mean J improved from 0.1242 to 0.1235 (+0.52%), worst-case J is 0.1810 well within +10% limit of 0.1998)
   - decisions.md updated for every deviation: YES (no deviations)
 - Verdict: PASS
+
+## Gate G5 & Work Packet WP-51 Verification
+- Date: 2026-11-07T12:02:00+05:30
+- Commands:
+  - `bash scripts/check_scope.sh WP-51`
+  - `PATH=".venv/bin:$PATH" PYTHONPATH=. bash scripts/gate_g5.sh`
+  - `ls -lh results/plots/`
+  - Mutation test on `tools/plot_trajectories.py`
+- Output:
+```
+Scope OK for WP-51
+=== Running Gate G5 Checks ===
+Check: results/final_ablation.md verified.
+Check: visualization plots verified.
+=== Verifying Gate G5 Held-Out Performance Criteria ===
+Baseline Mean J   : 0.1242
+Tuned Mean J      : 0.1235
+Baseline Worst J  : 0.1817
+Tuned Worst J     : 0.1810 (Safety Limit: 0.1998)
+[PASS] Held-out mean J improved and worst-case satisfies safety tolerance.
+=== Running Gate G3 Checks ===
+=== Running Differential Verification (40 test cases) ===
+ALL 40 DIFFERENTIAL TESTS PASSED.
+ALL MATH TESTS PASSED. (457 checks)
+ALL ESKF TESTS PASSED. (472 checks)
+ALL MODULE TESTS PASSED. (304 checks)
+GATE G3 PASS
+=== Running Gate G4 Checks ===
+Step 1: Building and running ASan/UBSan fuzz test suite...
+57 passed in 1.20s
+Step 2: Building clean release binary...
+Step 3: Running budget checks on synthetic sequences...
+peak_rss_kb=2344 cpu_ms_per_s=0.0000 duration_s=9.995000000 BUDGET OK
+peak_rss_kb=2308 cpu_ms_per_s=1.0005 duration_s=9.995000000 BUDGET OK
+GATE G4 PASS
+GATE G5 PASS
+```
+- Artifact verification:
+  - `results/final_ablation.md` verified: `eskf_full` outperforms `naive` by 7.26x on ATE (3.5209 m vs 25.5774 m) and 11.73x on Blind-5s RMSE (5.7608 m vs 67.5890 m). Mean objective J improved by 86.4% (0.1364 vs 1.0000). Peak RSS is 2.39 MB (<= 4.0 MB budget); latency is 0.00 ms/s (<= 2.0 ms/s budget).
+  - Visualization plots verified non-empty: `trajectory_circle_degraded.png` (126K), `error_circle_degraded.png` (154K), `trajectory_figure_eight_degraded.png` (121K), `error_figure_eight_degraded.png` (151K), `summary_ablation.png` (462K).
+- Mutation check: Mutated `tools/plot_trajectories.py` by adding `raise RuntimeError("MUTATION_TEST_FAIL")`; script immediately failed with exit code 1; restored cleanly.
+- Checklist:
+  - Tests exist for every item under "Tests first" and fail when code is broken: YES (visual plot generation, comprehensive markdown table generation, budget verification)
+  - No magic numbers; constants come from configs/params.json and configs/tune_space.json: YES
+  - No forbidden constructs (no global state, no dicts inside filter loops, fixed-size math, single-threaded): YES
+  - Output format unchanged: YES (strict 8-column format verified across all sequences)
+  - Differential parity verified: YES (40/40 tests pass with zero diffs)
+  - Memory and latency budgets met: YES (Peak RSS ~2.3 MB <= 4.0 MB; CPU time <= 1.0 ms/s <= 2.0 ms/s)
+  - decisions.md updated for every deviation: YES (no deviations)
+- Verdict: PASS
