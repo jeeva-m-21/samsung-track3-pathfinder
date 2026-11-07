@@ -1,5 +1,5 @@
 # STATE
-Updated: 2026-11-07T00:35:00+05:30 by Reviewer
+Updated: 2026-11-07T09:55:00+05:30 by Reviewer
 Current phase: P3
 Last passed gate: G2
 
@@ -22,7 +22,7 @@ Last passed gate: G2
 | WP-26 | DONE | Estimator | 0 | Gap and dropout handler verified PASS, reviewed |
 | WP-27 | DONE | Estimator | 0 | Failure detector and blind-5s predictor verified PASS, reviewed |
 | WP-28 | DONE | Estimator | 0 | Full pipeline & ablations verified, Gate G2 PASS, reviewed |
-| WP-30 | REVIEW | CppPort | 0 | C++ skeleton, buffered stdio parser/writer, params.h verified PASS |
+| WP-30 | DONE | CppPort | 0 | C++ skeleton, buffered stdio parser/writer, params.h verified PASS |
 | WP-31 | TODO | CppPort | 0 | mat.h, quat.h fixed-size math + C++ unit tests |
 | WP-32 | TODO | CppPort | 0 | Port init, strapdown, ESKF predict |
 | WP-33 | TODO | CppPort | 0 | Port updates, monitor, gap, blind |

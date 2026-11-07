@@ -287,3 +287,33 @@ GATE G2 PASS
   - Output format unchanged: YES (frozen 8-column format)
   - decisions.md updated for every deviation: YES
 - Verdict: PASS
+
+## Work Packet WP-30 Verification
+- Date: 2026-11-07T09:55:00+05:30
+- Commands:
+  - `bash scripts/check_scope.sh WP-30`
+  - `python3 tools/export_params.py`
+  - `make -C src/cpp clean && make -C src/cpp`
+  - `src/cpp/build/main data/synth/circle.csv /tmp/out.txt`
+  - `python3 tools/validate_trajectory.py data/synth/circle.csv /tmp/out.txt`
+  - `make -C src/cpp sanitize && src/cpp/build/main data/synth/circle.csv /tmp/out.txt`
+  - `/usr/bin/time -v taskset -c 0 src/cpp/build/main data/synth/circle.csv /tmp/out.txt`
+  - `PATH=".venv/bin:$PATH" PYTHONPATH=. pytest -q`
+- Output:
+```
+Scope OK for WP-30
+Exported /home/jeeva/projects/samsung_hackathon/configs/params.json -> /home/jeeva/projects/samsung_hackathon/src/cpp/params.h
+VALID: Trajectory matches specification.
+Peak RSS: 1920 KB (limit <= 4096 KB)
+CPU time: < 0.01s for 10s data (~1 ms/s, limit <= 2.0 ms/s)
+Deterministic output: PASS (bit-identical across runs)
+151 passed in 2.30s
+```
+- Mutation check: Mutated `src/cpp/io.cpp` TrajectoryWriter to output 9 columns; compiled and ran on `circle.csv`; `tools/validate_trajectory.py` immediately failed with `Column count mismatch (expected 8, got 9)`; restored `io.cpp` and verified trajectory validation passed cleanly.
+- Checklist:
+  - Tests exist for every item under "Tests first" and fail when code is broken: YES
+  - No magic numbers; constants come from configs/params.json: YES
+  - No forbidden constructs (no <iostream>, no dynamic allocation in streaming loop, pure stdio): YES
+  - Output format unchanged: YES (frozen 8-column format, int64 timestamp formatting preserved)
+  - decisions.md updated for every deviation: YES (no deviations)
+- Verdict: PASS
