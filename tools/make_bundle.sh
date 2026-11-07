@@ -5,6 +5,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
 TEAM_NAME="${1:-VITC_SingleThread}"
+DATASET_PATH="${2:-data/euroc/MH_01_easy}"
 BUNDLE_ZIP="${TEAM_NAME}.zip"
 
 echo "=== Building Submission Bundle for ${TEAM_NAME} (PRD Section 8.1) ==="
@@ -14,16 +15,24 @@ echo "[1/5] Building release binary..."
 make clean > /dev/null
 make > /dev/null
 
-if [ ! -f "estimated_trajectory.txt" ]; then
-    echo "[2/5] Generating estimated_trajectory.txt from official evaluation sequence (EuRoC MH_01_easy)..."
-    ./main data/euroc/MH_01_easy estimated_trajectory.txt
-else
-    echo "[2/5] Using existing estimated_trajectory.txt..."
+echo "[2/5] Generating estimated_trajectory.txt from evaluation dataset: ${DATASET_PATH}..."
+./main "${DATASET_PATH}" estimated_trajectory.txt
+
+# Resolve CSV path for validation
+VALIDATE_INPUT="${DATASET_PATH}"
+if [ -d "${DATASET_PATH}" ]; then
+    if [ -f "${DATASET_PATH}/imu0/data.csv" ]; then
+        VALIDATE_INPUT="${DATASET_PATH}/imu0/data.csv"
+    elif [ -f "${DATASET_PATH}/mav0/imu0/data.csv" ]; then
+        VALIDATE_INPUT="${DATASET_PATH}/mav0/imu0/data.csv"
+    elif [ -f "${DATASET_PATH}/data.csv" ]; then
+        VALIDATE_INPUT="${DATASET_PATH}/data.csv"
+    fi
 fi
 
 # Validate trajectory format
-echo "      Validating estimated_trajectory.txt..."
-python3 tools/validate_trajectory.py data/euroc/MH_01_easy/mav0/imu0/data.csv estimated_trajectory.txt
+echo "      Validating estimated_trajectory.txt against ${VALIDATE_INPUT}..."
+python3 tools/validate_trajectory.py "${VALIDATE_INPUT}" estimated_trajectory.txt
 
 # Step 2: Validate metadata.json
 echo "[3/5] Validating metadata.json..."
