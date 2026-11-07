@@ -1,14 +1,25 @@
+# Data & Build Artifacts
 data/
 build/
 *.o
 *.so
 *.a
-__pycache__/
-*.pyc
-results/tmp/
-.venv/
-requirements.txt
-*.zip
 main
 src/main
 src/cpp/build/
+*.zip
+estimated_trajectory.txt
+
+# Python & Environment
+__pycache__/
+*.pyc
+.venv/
+requirements.txt
+results/tmp/
+
+# Internal Agent Logs, Packets & Reports
+.agent/
+docs/
+results/
+PLAN.md
+GEMINI.md
