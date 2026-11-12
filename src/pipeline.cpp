@@ -959,6 +959,8 @@ int run_eskf_full(const char* input_path,
             apply_tilt_update(state, P, acc_filt, omega_curr, monitor.quality(), g_w, 1e9, step_res.r_scale);
             if (is_stat) {
                 apply_zupt_update(state, P, 1e9, step_res.r_scale);
+            } else if (params::enable_rotor_drag) {
+                apply_rotor_drag_update(state, P, acc_curr, omega_curr, g_w, params::rotor_drag_kd, params::rotor_drag_sigma, params::rotor_drag_gate);
             }
             apply_velocity_bounding(state, P);
         }

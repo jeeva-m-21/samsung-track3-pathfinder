@@ -313,3 +313,65 @@ bool apply_velocity_bounding(NominalState& state,
 
     return joseph_update(state, P, H, y, R, 1e9);
 }
+
+bool apply_rotor_drag_update(NominalState& state,
+                             Mat15& P,
+                             const Vec3& acc,
+                             const Vec3& omega,
+                             const Vec3& g_w,
+                             double kd,
+                             double sigma_drag,
+                             double gate_threshold) {
+    if (!params::enable_rotor_drag || kd <= 0.0) {
+        return false;
+    }
+
+    if (omega.norm() > 2.0) {
+        return false;
+    }
+
+    Mat3 R_bw = state.q.to_rot_mat();
+    Vec3 a_unbiased_body = acc - state.b_a;
+    Vec3 a_world = (R_bw * a_unbiased_body) + g_w;
+
+    double a_norm = a_unbiased_body.norm();
+    if (a_norm < 5.0 || a_norm > 20.0) {
+        return false;
+    }
+
+    Vec3 y = math::make_vec3(a_world(0) + kd * state.v(0),
+                             a_world(1) + kd * state.v(1),
+                             0.0);
+
+    Mat3x15 H = Mat3x15::zeros();
+    Mat3 H_v = Mat3::zeros();
+    H_v(0, 0) = -kd;
+    H_v(1, 1) = -kd;
+    H.set_block<3, 3>(0, 3, H_v);
+
+    Vec3 a_rot = R_bw * a_unbiased_body;
+    Mat3 S_arot = math::skew(a_rot);
+    Mat3 H_th = Mat3::zeros();
+    H_th(0, 0) = S_arot(0, 0);
+    H_th(0, 1) = S_arot(0, 1);
+    H_th(0, 2) = S_arot(0, 2);
+    H_th(1, 0) = S_arot(1, 0);
+    H_th(1, 1) = S_arot(1, 1);
+    H_th(1, 2) = S_arot(1, 2);
+    H.set_block<3, 3>(0, 0, H_th);
+
+    Mat3 H_ba = Mat3::zeros();
+    H_ba(0, 0) = R_bw(0, 0);
+    H_ba(0, 1) = R_bw(0, 1);
+    H_ba(0, 2) = R_bw(0, 2);
+    H_ba(1, 0) = R_bw(1, 0);
+    H_ba(1, 1) = R_bw(1, 1);
+    H_ba(1, 2) = R_bw(1, 2);
+    H.set_block<3, 3>(0, 12, H_ba);
+
+    double var_drag = sigma_drag * sigma_drag;
+    Mat3 R = Mat3::identity() * var_drag;
+    R(2, 2) = 1e8;
+
+    return joseph_update(state, P, H, y, R, gate_threshold);
+}

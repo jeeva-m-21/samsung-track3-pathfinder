@@ -109,4 +109,14 @@ bool apply_velocity_bounding(NominalState& state,
                              double max_speed = params::max_velocity_mps,
                              double sigma_v = params::velocity_bounding_sigma);
 
+// Rotor drag-aided horizontal velocity update (Leishman et al. 2014, Faessler et al. 2018)
+bool apply_rotor_drag_update(NominalState& state,
+                             Mat15& P,
+                             const Vec3& acc,
+                             const Vec3& omega,
+                             const Vec3& g_w,
+                             double kd = params::rotor_drag_kd,
+                             double sigma_drag = params::rotor_drag_sigma,
+                             double gate_threshold = params::rotor_drag_gate);
+
 #endif // UPDATES_H

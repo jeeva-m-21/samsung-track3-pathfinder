@@ -109,8 +109,18 @@ Mat15 build_f_matrix(const NominalState& state,
     F.set_block<3, 3>(3, 3, Mat3::identity() * decay_ou);
 
     Mat3 R_old = to_rot_mat(state.q);
-    Mat3 S_a = skew(a_hat);
-    Mat3 block_v_th = (R_old * S_a) * (-dt);
+    Mat3 block_v_th;
+    if (params::enable_inekf_transition) {
+        // InEKF SE_2(3) exact analytical gravity coupling (Barrau 2017, Hartley 2020):
+        // Replaces noise-corrupted specific force in the Jacobian with the exact analytical gravity expectation.
+        Vec3 g_w = make_vec3(0.0, 0.0, -9.80665);
+        Vec3 a_grav_body = R_old.transpose() * (-g_w);
+        Mat3 S_agrav = skew(a_grav_body);
+        block_v_th = (R_old * S_agrav) * (-dt);
+    } else {
+        Mat3 S_a = skew(a_hat);
+        block_v_th = (R_old * S_a) * (-dt);
+    }
     F.set_block<3, 3>(3, 0, block_v_th);
 
     Mat3 block_v_ba = R_old * (-dt);
