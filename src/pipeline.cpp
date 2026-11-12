@@ -879,6 +879,8 @@ int run_eskf_full(const char* input_path,
     double g_mag = 9.80665;
     int64_t t0_ns = 0;
     int64_t prev_t_ns = 0;
+    double q_gyro_mult = params::noise_mult_gyro;
+    double q_acc_mult = params::noise_mult_acc;
 
     TrajectoryCollector collector;
 
@@ -922,7 +924,7 @@ int run_eskf_full(const char* input_path,
 
         state = strapdown_step_midpoint(state, omega_curr, acc_curr, dt, g_w);
         Mat15 F = build_f_matrix(state, omega_curr, acc_curr, dt);
-        Mat15 Q = build_q_matrix(dt, params::noise_mult_gyro, params::noise_mult_acc,
+        Mat15 Q = build_q_matrix(dt, q_gyro_mult, q_acc_mult,
                                  params::walk_mult_bg, params::walk_mult_ba, monitor.kappa());
         P = propagate_covariance(P, F, Q);
 
@@ -974,6 +976,17 @@ int run_eskf_full(const char* input_path,
                 g_mag = initializer.g_mag();
                 t0_ns = s_init_buf[0].t_ns;
                 tilt_filter.reset(initializer.a_mean());
+
+                double sigma_w_init = initializer.gyro_noise_std();
+                double sigma_a_init = initializer.acc_noise_std();
+                double scale_g = (sigma_w_init > 1e-5) ? (sigma_w_init / 0.020) : 0.2;
+                double scale_a = (sigma_a_init > 1e-5) ? (sigma_a_init / 0.300) : 0.2;
+                if (scale_g < 0.2) scale_g = 0.2;
+                if (scale_g > 1.0) scale_g = 1.0;
+                if (scale_a < 0.2) scale_a = 0.2;
+                if (scale_a > 1.0) scale_a = 1.0;
+                q_gyro_mult = params::noise_mult_gyro * scale_g;
+                q_acc_mult = params::noise_mult_acc * scale_a;
 
                 for (size_t idx = 0; idx < init_count; ++idx) {
                     int64_t t_smp = s_init_buf[idx].t_ns;

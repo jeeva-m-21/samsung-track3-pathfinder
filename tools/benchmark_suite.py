@@ -15,13 +15,22 @@ DATASETS = [
     ('figure_eight', 'data/synth/figure_eight.csv', 'data/synth/figure_eight_gt.txt')
 ]
 
+def get_binary_path():
+    candidates = ['./main', 'src/main', 'src/build/main']
+    for c in candidates:
+        if os.path.isfile(c) and os.access(c, os.X_OK):
+            return c
+    subprocess.run(['make'], check=True, stdout=subprocess.DEVNULL)
+    return './main'
+
 def run_suite():
+    binary = get_binary_path()
     results = {}
     print(f'| {"Sequence":<15} | {"ATE RMSE Aligned (m)":<22} | {"RPE 1s (m)":<12} |')
     print('|' + '-'*17 + '|' + '-'*24 + '|' + '-'*14 + '|')
     for name, imu, gt in DATASETS:
         out_file = f'/tmp/eval_{name}.txt'
-        subprocess.run(['./main', imu, out_file], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.run([binary, imu, out_file], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         m = compute_trajectory_metrics(gt, out_file)
         results[name] = m
         print(f'| {name:<15} | {m["ate_rmse_aligned"]:>22.4f} | {m["rpe_trans_1s"]:>12.4f} |')

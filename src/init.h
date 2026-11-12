@@ -52,6 +52,8 @@ public:
     bool is_motion_detected() const { return motion_detected_; }
     double g_mag() const { return g_mag_; }
     Vec3 a_mean() const;
+    double gyro_noise_std() const;
+    double acc_noise_std() const;
 
 private:
     int64_t t_buf_[MAX_SAMPLES];

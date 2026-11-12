@@ -207,6 +207,46 @@ Vec3 Initializer::a_mean() const {
     return sum * (1.0 / static_cast<double>(valid_count));
 }
 
+double Initializer::gyro_noise_std() const {
+    Vec3 w_sum = make_vec3(0.0, 0.0, 0.0);
+    size_t valid_count = 0;
+    for (size_t i = 0; i < count_; ++i) {
+        if (std::isfinite(w_buf_[i].data[0]) && std::isfinite(w_buf_[i].data[1]) && std::isfinite(w_buf_[i].data[2])) {
+            w_sum += w_buf_[i];
+            valid_count++;
+        }
+    }
+    if (valid_count < 2) {
+        return 0.020;
+    }
+    Vec3 mean_w = w_sum * (1.0 / static_cast<double>(valid_count));
+    double sum_sq = 0.0;
+    for (size_t i = 0; i < count_; ++i) {
+        if (std::isfinite(w_buf_[i].data[0]) && std::isfinite(w_buf_[i].data[1]) && std::isfinite(w_buf_[i].data[2])) {
+            Vec3 diff = w_buf_[i] - mean_w;
+            sum_sq += diff.dot(diff);
+        }
+    }
+    return std::sqrt(sum_sq / static_cast<double>(3 * valid_count));
+}
+
+double Initializer::acc_noise_std() const {
+    Vec3 a_m = a_mean();
+    double sum_sq = 0.0;
+    size_t valid_count = 0;
+    for (size_t i = 0; i < count_; ++i) {
+        if (std::isfinite(a_buf_[i].data[0]) && std::isfinite(a_buf_[i].data[1]) && std::isfinite(a_buf_[i].data[2])) {
+            Vec3 diff = a_buf_[i] - a_m;
+            sum_sq += diff.dot(diff);
+            valid_count++;
+        }
+    }
+    if (valid_count < 2) {
+        return 0.300;
+    }
+    return std::sqrt(sum_sq / static_cast<double>(3 * valid_count));
+}
+
 void Initializer::finish(NominalState& state, Mat15& P0, Vec3& g_w) const {
     size_t valid_count = 0;
     Vec3 w_sum = make_vec3(0.0, 0.0, 0.0);
