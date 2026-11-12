@@ -16,6 +16,24 @@ int main(int argc, char* argv[]) {
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--append-blind") == 0) {
             append_blind = true;
+        } else if (std::strcmp(argv[i], "--input") == 0 || std::strcmp(argv[i], "-i") == 0) {
+            if (i + 1 < argc) {
+                raw_input_path = argv[++i];
+            } else {
+                std::fprintf(stderr, "Error: %s requires a path argument\n", argv[i]);
+                return 1;
+            }
+        } else if (std::strncmp(argv[i], "--input=", 8) == 0) {
+            raw_input_path = argv[i] + 8;
+        } else if (std::strcmp(argv[i], "--output") == 0 || std::strcmp(argv[i], "-o") == 0) {
+            if (i + 1 < argc) {
+                output_path = argv[++i];
+            } else {
+                std::fprintf(stderr, "Error: %s requires a path argument\n", argv[i]);
+                return 1;
+            }
+        } else if (std::strncmp(argv[i], "--output=", 9) == 0) {
+            output_path = argv[i] + 9;
         } else if (std::strcmp(argv[i], "--ablation") == 0) {
             if (i + 1 < argc) {
                 ablation_mode = argv[++i];
@@ -128,6 +146,13 @@ int main(int argc, char* argv[]) {
                               raw_input_path, tmp_path);
                 int ret2 = std::system(cmd);
                 (void)ret2;
+            }
+
+            if (stat(tmp_path, &st_zip) != 0 || st_zip.st_size == 0) {
+                std::snprintf(cmd, sizeof(cmd), "unzip -p '%s' '*.csv' > '%s' 2>/dev/null",
+                              raw_input_path, tmp_path);
+                int ret3 = std::system(cmd);
+                (void)ret3;
             }
 
             if (stat(tmp_path, &st_zip) == 0 && st_zip.st_size > 0) {

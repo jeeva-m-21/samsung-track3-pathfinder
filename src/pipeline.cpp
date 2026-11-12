@@ -25,7 +25,7 @@ struct DelayedPose {
     bool is_gap;
 };
 
-static constexpr size_t MAX_TRAJECTORY_SAMPLES = 60000;
+static constexpr size_t MAX_TRAJECTORY_SAMPLES = 120000;
 static Vec3 s_pos_pass1[MAX_TRAJECTORY_SAMPLES];
 
 struct TrajectoryCollector {
@@ -1027,35 +1027,51 @@ int run_eskf_full(const char* input_path,
 
     delay_buf.flush(collector);
 
-    // Append blind (5.0s extrapolation)
-    if (append_blind && prev_t_ns > 0) {
-        if (!blind_predictor.is_failed()) {
-            blind_predictor.notify_stream_end(prev_t_ns);
-        }
-
-        double dt_nom = (gap_handler.dt_nom() > 0.0) ? gap_handler.dt_nom() : 0.005;
-        int64_t dt_ns_step = std::max(static_cast<int64_t>(1), static_cast<int64_t>(std::round(dt_nom * 1e9)));
-        int blind_steps = static_cast<int>(std::round(5.0 * 1e9 / static_cast<double>(dt_ns_step)));
-
-        for (int step = 1; step <= blind_steps; ++step) {
-            int64_t t_extrap = prev_t_ns + step * dt_ns_step;
-            Vec3 p_extrap;
-            Quat q_extrap;
-            blind_predictor.predict(t_extrap, p_extrap, q_extrap);
-            collector.write_pose(t_extrap, p_extrap.data[0], p_extrap.data[1], p_extrap.data[2],
-                                 q_extrap.x, q_extrap.y, q_extrap.z, q_extrap.w);
-        }
-    }
-
-    // Pass 2: Offline drift-aware bounded-workspace filter
+    size_t stream_count = collector.count;
     double dt_nom = (gap_handler.dt_nom() > 0.0) ? gap_handler.dt_nom() : 0.005;
-    if (params::enable_two_pass_filter) {
-        apply_bounded_workspace_filter(s_pos_pass1, collector.count, dt_nom, params::two_pass_cutoff_period);
+
+    // Determine if IMU failure occurred during the stream
+    size_t active_count = stream_count;
+    Vec3 p_raw_split = math::make_vec3(0.0, 0.0, 0.0);
+    bool failed_in_stream = false;
+
+    if (blind_predictor.is_failed() && stream_count > 0 && collector.tmp_file) {
+        int64_t t_fail = blind_predictor.failure_time_ns();
+        std::rewind(collector.tmp_file);
+        for (size_t i = 0; i < stream_count; ++i) {
+            TrajectoryCollector::Record rec;
+            if (std::fread(&rec, sizeof(rec), 1, collector.tmp_file) == 1) {
+                if (rec.t_ns >= t_fail) {
+                    active_count = i;
+                    failed_in_stream = true;
+                    if (i > 0) {
+                        p_raw_split = s_pos_pass1[i - 1];
+                    }
+                    break;
+                }
+            }
+        }
     }
 
+    // Apply Pass 2 bounded-workspace filter ONLY to the active flight segment
+    if (params::enable_two_pass_filter && active_count > 0) {
+        apply_bounded_workspace_filter(s_pos_pass1, active_count, dt_nom, params::two_pass_cutoff_period);
+    }
+
+    // If failure occurred during stream, shift subsequent dead-reckoned poses
+    // so they project forward continuously from the filtered failure point without backward-pass distortion
+    if (failed_in_stream && active_count > 0 && active_count < stream_count) {
+        Vec3 p_filtered_split = s_pos_pass1[active_count - 1];
+        Vec3 delta_align = p_filtered_split - p_raw_split;
+        for (size_t i = active_count; i < stream_count; ++i) {
+            s_pos_pass1[i] = s_pos_pass1[i] + delta_align;
+        }
+    }
+
+    // Write all active and in-stream poses
     if (collector.tmp_file) {
         std::rewind(collector.tmp_file);
-        for (size_t i = 0; i < collector.count; ++i) {
+        for (size_t i = 0; i < stream_count; ++i) {
             TrajectoryCollector::Record rec;
             if (std::fread(&rec, sizeof(rec), 1, collector.tmp_file) == 1) {
                 writer.write_pose(rec.t_ns,
@@ -1064,6 +1080,30 @@ int run_eskf_full(const char* input_path,
                                   s_pos_pass1[i].data[2],
                                   rec.qx, rec.qy, rec.qz, rec.qw);
             }
+        }
+    }
+
+    // Append blind (5.0s extrapolation) from clean filtered endpoint
+    if (append_blind && prev_t_ns > 0 && stream_count > 0) {
+        if (!blind_predictor.is_failed()) {
+            blind_predictor.notify_stream_end(prev_t_ns);
+        }
+
+        Vec3 p_last_filtered = s_pos_pass1[stream_count - 1];
+        Vec3 p_raw_endpoint = blind_predictor.frozen_state().p;
+        Vec3 delta_endpoint_align = p_last_filtered - p_raw_endpoint;
+
+        int64_t dt_ns_step = std::max(static_cast<int64_t>(1), static_cast<int64_t>(std::round(dt_nom * 1e9)));
+        int blind_steps = static_cast<int>(std::round(5.0 * 1e9 / static_cast<double>(dt_ns_step)));
+
+        for (int step = 1; step <= blind_steps; ++step) {
+            int64_t t_extrap = prev_t_ns + step * dt_ns_step;
+            Vec3 p_extrap;
+            Quat q_extrap;
+            blind_predictor.predict(t_extrap, p_extrap, q_extrap);
+            Vec3 p_final = p_extrap + delta_endpoint_align;
+            writer.write_pose(t_extrap, p_final.data[0], p_final.data[1], p_final.data[2],
+                              q_extrap.x, q_extrap.y, q_extrap.z, q_extrap.w);
         }
     }
 

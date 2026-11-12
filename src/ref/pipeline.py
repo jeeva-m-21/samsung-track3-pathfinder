@@ -434,28 +434,38 @@ def run_eskf_full(
 
         delay_buf.flush(collector)
 
-        # Append blind 5.0s extrapolation if requested
-        if append_blind and prev_t_ns > 0:
-            if not blind_predictor.is_failed:
-                blind_predictor.notify_stream_end(prev_t_ns)
-
-            dt_nom = gap_handler.dt_nom if gap_handler.dt_nom > 0.0 else 0.005
-            dt_ns_step = max(1, int(round(dt_nom * 1e9)))
-            blind_poses = blind_predictor.generate_blind_poses(prev_t_ns, dt_ns_step, duration_s=5.0)
-
-            for t_extrap, p_extrap, q_extrap in blind_poses:
-                collector.write_pose(t_extrap, p_extrap[0], p_extrap[1], p_extrap[2],
-                                     q_extrap[1], q_extrap[2], q_extrap[3], q_extrap[0])
-
         # Pass 2: Offline drift-aware bounded-workspace filter
         dt_nom = float(gap_handler.dt_nom if gap_handler.dt_nom > 0.0 else 0.005)
-        t_ns_arr = [r[0] for r in collector.rows]
-        pos_arr = np.array([r[1] for r in collector.rows], dtype=np.float64)
-        quat_arr = np.array([r[2] for r in collector.rows], dtype=np.float64)
+        stream_rows = list(collector.rows)
+        stream_count = len(stream_rows)
 
-        if bool(cfg.get("enable_two_pass_filter", True)):
+        # Determine if IMU failure occurred during the stream
+        active_count = stream_count
+        p_raw_split = np.zeros(3, dtype=np.float64)
+        failed_in_stream = False
+
+        if blind_predictor.is_failed and stream_count > 0:
+            t_fail = blind_predictor.failure_time_ns
+            for i, r in enumerate(stream_rows):
+                if r[0] >= t_fail:
+                    active_count = i
+                    failed_in_stream = True
+                    if i > 0:
+                        p_raw_split = stream_rows[i - 1][1].copy()
+                    break
+
+        pos_arr = np.array([r[1] for r in stream_rows], dtype=np.float64)
+        t_ns_arr = [r[0] for r in stream_rows]
+        quat_arr = np.array([r[2] for r in stream_rows], dtype=np.float64)
+
+        if bool(cfg.get("enable_two_pass_filter", True)) and active_count > 0:
             cutoff_T = float(cfg.get("two_pass_cutoff_period", 45.0))
-            pos_arr = apply_bounded_workspace_filter(pos_arr, dt_nom, cutoff_T)
+            pos_arr[:active_count] = apply_bounded_workspace_filter(pos_arr[:active_count], dt_nom, cutoff_T)
+
+        if failed_in_stream and active_count > 0 and active_count < stream_count:
+            p_filtered_split = pos_arr[active_count - 1]
+            delta_align = p_filtered_split - p_raw_split
+            pos_arr[active_count:] += delta_align
 
         for i in range(len(t_ns_arr)):
             t_ns_i = t_ns_arr[i]
@@ -467,6 +477,27 @@ def run_eskf_full(
                 f"{sec}.{nsec:09d} {p_i[0]:.9f} {p_i[1]:.9f} {p_i[2]:.9f} "
                 f"{q_i[0]:.9f} {q_i[1]:.9f} {q_i[2]:.9f} {q_i[3]:.9f}\n"
             )
+
+        # Append blind 5.0s extrapolation from clean filtered endpoint
+        if append_blind and prev_t_ns > 0 and stream_count > 0:
+            if not blind_predictor.is_failed:
+                blind_predictor.notify_stream_end(prev_t_ns)
+
+            p_last_filtered = pos_arr[-1]
+            p_raw_endpoint = blind_predictor.frozen_state.p
+            delta_endpoint_align = p_last_filtered - p_raw_endpoint
+
+            dt_ns_step = max(1, int(round(dt_nom * 1e9)))
+            blind_poses = blind_predictor.generate_blind_poses(prev_t_ns, dt_ns_step, duration_s=5.0)
+
+            for t_extrap, p_extrap, q_extrap in blind_poses:
+                p_final = p_extrap + delta_endpoint_align
+                sec = t_extrap // 1_000_000_000
+                nsec = t_extrap % 1_000_000_000
+                f_out.write(
+                    f"{sec}.{nsec:09d} {p_final[0]:.9f} {p_final[1]:.9f} {p_final[2]:.9f} "
+                    f"{q_extrap[1]:.9f} {q_extrap[2]:.9f} {q_extrap[3]:.9f} {q_extrap[0]:.9f}\n"
+                )
 
 
 def run_eskf_basic(
