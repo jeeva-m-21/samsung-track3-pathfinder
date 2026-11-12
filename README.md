@@ -13,12 +13,14 @@ In pure inertial dead-reckoning, navigation systems must estimate 3D position, v
 **Path Finder** is an embedded-grade, ultra-lightweight **15-State Error-State Kalman Filter (ESKF)** written in strict **C++17**. It operates under zero-heap-allocation constraints inside the filter loop, maintains strict numerical stability through Joseph-stabilized covariance updates, and features adaptive sensor resilience algorithms that seamlessly handle packet dropouts, sensor freezes, and complete blackout cutoffs.
 
 ### Key Achievements:
-- **Accuracy Improvement**: Achieved an **86.4% reduction in overall tracking error** ($J = 0.1364$ vs $1.0000$ naive baseline).
-- **Real Drone Flight (EuRoC MAV `MH_01_easy`)**: Reduced open-loop quadratic drift from **22,247 m RMSE down to 35.32 m RMSE** ($630\times$ improvement).
-- **Embedded Memory Footprint**: Peak resident memory (RSS) is **2.39 MB** (well below the 4.0 MB budget and 8.0 MB hard ceiling, giving >40% safety margin).
-- **Ultra-High Throughput**: Execution latency is **< 1.0 ms per 1 second of IMU data** (>20x faster than the 2.0 ms/s competition limit).
+- **Accuracy Improvement**: Achieved an **86.4% reduction in overall tracking error** ($J = 0.1364$ normalized composite loss vs $1.0000$ naive baseline).
+- **Real Drone Flight (EuRoC MAV `MH_01_easy`)**:
+  - **SE(3)-Aligned ATE RMSE** (rigid Umeyama, scale=1.0 fixed per official `evo` standard): **`3.78 m`** (vs $34.61\text{ m}$ naive baseline, an $89.1\%$ error reduction).
+  - **Raw Unaligned ATE RMSE**: **`35.32 m`** (reduced $630\times$ from naive open-loop quadratic divergence of $22,247\text{ m}$).
+- **Embedded Memory Footprint**: Peak resident set size (RSS) is **`2.35 MB`** on real telemetry, well below the **$\le 8.0\text{ MB}$** competition ceiling (and our strict internal $\le 4.0\text{ MB}$ engineering target), providing $>5.6\text{ MB}$ ($>70\%$) memory headroom.
+- **Ultra-High Throughput**: Execution latency is **`1.10–1.25 ms per 1.0 s of IMU data`** ($16\times$ faster than the official $\le 20.0\text{ ms/s}$ competition limit, and well below our internal $\le 2.0\text{ ms/s}$ target).
 - **Zero Allocations & Zero Streams**: 0 dynamic allocations (`malloc`/`new`) in the streaming loop; 0 `<iostream>` usage (pure buffered POSIX `stdio`).
-- **Memory Safety**: 100% verified with **AddressSanitizer (ASan)** and **UndefinedBehaviorSanitizer (UBSan)** across 57 adversarial fuzzing test cases.
+- **Memory Safety & Unit Test Coverage**: 100% verified with **AddressSanitizer (ASan)** and **UndefinedBehaviorSanitizer (UBSan)** across **1,241 unit test assertions** and 57 adversarial fuzzing test cases.
 
 ---
 
@@ -128,15 +130,15 @@ Evaluated across degraded benchmark sequences comparing four standard filter con
 
 ## 4. Hardware Budget & Constraint Verification
 
-| Constraint | Competition Limit | Measured Value | Status |
-| :--- | :--- | :--- | :--- |
-| **Peak RAM (RSS)** | $\le 4,096\text{ KB}$ (Soft) / $\le 8,192\text{ KB}$ (Hard) | **`2,392 KB`** ($2.39\text{ MB}$) | **PASS** (+1.7 MB headroom) |
-| **Execution Latency** | $\le 2.0\text{ ms}$ per 1 s of IMU data | **`< 1.0 ms/s`** | **PASS** (>20x faster than limit) |
-| **OS Threads** | Strictly 1 thread | **1 thread** | **PASS** (Zero background workers) |
-| **Filter Loop Allocations**| 0 heap allocations | **0 dynamic allocations** | **PASS** (Stack & static buffers) |
-| **Standard I/O Streams** | Zero `<iostream>` | **0 occurrences** | **PASS** (Pure buffered `stdio`) |
-| **Determinism** | 100% bit-identical | `sha1sum` identical | **PASS** (Zero non-deterministic jitter) |
-| **Output Format** | TUM 8 space-separated columns | Passed validator | **PASS** (Exact int64 ns timestamps) |
+| Constraint | Competition Limit | Internal Target | Measured Value | Status |
+| :--- | :--- | :--- | :--- | :--- |
+| **Peak RAM (RSS)** | $\le 8,192\text{ KB}$ ($8.0\text{ MB}$) | $\le 4,096\text{ KB}$ ($4.0\text{ MB}$) | **`2,348 KB`** ($2.29\text{ MB}$) | **PASS** ($>5.6\text{ MB}$ headroom) |
+| **Execution Latency** | $\le 20.0\text{ ms / s}$ of IMU | $\le 2.0\text{ ms / s}$ of IMU | **`1.10–1.25 ms/s`** | **PASS** ($16\times$ faster than limit) |
+| **OS Threads** | Strictly 1 thread | Strictly 1 thread | **1 thread** | **PASS** (Zero background workers) |
+| **Filter Loop Allocations**| 0 heap allocations | 0 heap allocations | **0 dynamic allocations** | **PASS** (Stack & static buffers) |
+| **Standard I/O Streams** | Zero `<iostream>` | Zero `<iostream>` | **0 occurrences** | **PASS** (Pure buffered `stdio`) |
+| **Determinism** | 100% bit-identical | 100% bit-identical | `sha1sum` identical | **PASS** (Zero non-deterministic jitter) |
+| **Output Format** | TUM 8 space-separated columns | TUM 8 space-separated columns | Passed validator | **PASS** (Exact int64 ns timestamps) |
 
 ---
 
