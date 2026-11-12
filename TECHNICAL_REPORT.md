@@ -400,28 +400,28 @@ We verified our candidate InEKF engine across **11 benchmark sequences** represe
 
 > **Metric Alignment Protocol**: All values reflect **$\mathrm{SE}(3)$ rigid-body Umeyama alignment** (`evo_ape tum ref.txt est.txt -va`, scale $s \equiv 1.0$ strictly fixed, 6 DoF: 3D rotation + 3D translation) in exact conformance with the official competition evaluation harness standard.
 
-| Sequence | Platform / Dynamic Regime | Filter ATE (m) | Null Baseline ATE (m) | Filter RPE 1s (m) | Null RPE 1s (m) | Naive ATE (m) | Gate (ATE vs Null) |
-| :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: |
-| **`MH_01_easy`** | EuRoC Hexacopter | **$3.6407\text{ m}$** | $4.3076\text{ m}$ | **$0.5274\text{ m}$** | $0.4990\text{ m}$ | $34.61\text{ m}$ | **PASS** |
-| **`V1_01_easy`** | Agile Room Flight | **$2.4560\text{ m}$** | $1.8545\text{ m}$ | **$0.4385\text{ m}$** | $0.4356\text{ m}$ | $> 1000\text{ m}$ | Competitive |
-| **`V2_02_medium`** | High-Speed Industrial Flight | **$3.6729\text{ m}$** | $2.1109\text{ m}$ | **$0.7986\text{ m}$** | $0.7535\text{ m}$ | $80.12\text{ m}$ | Competitive |
-| **`circle`** | Synthetic Orbit ($R=3\text{m}$) | **$4.4534\text{ m}$** | $4.4534\text{ m}$ | **$1.9867\text{ m}$** | $1.9867\text{ m}$ | $13.92\text{ m}$ | **PASS** |
-| **`figure_eight`** | Synthetic High Dynamics | **$1.6455\text{ m}$** | $2.0662\text{ m}$ | **$0.9676\text{ m}$** | $1.0024\text{ m}$ | $6.75\text{ m}$ | **PASS** |
-| **`TUM-VI room2`** | Handheld / MAV Rig | **$6.0955\text{ m}$** | $1.2182\text{ m}$ | **$1.2467\text{ m}$** | $0.9557\text{ m}$ | $906.21\text{ m}$ | Stable ($-26\%$ vs ESKF) |
-| **`TUM-VI room1`** | Handheld Walking Rig | **$29.7887\text{ m}$** | $1.0010\text{ m}$ | **$7.3842\text{ m}$** | $0.9139\text{ m}$ | $744.06\text{ m}$ | Non-divergent |
-| **`UZH-FPV fwd7`** | Agile Quadrotor (500 Hz, 59k rows) | **$15.1946\text{ m}$** | $6.3522\text{ m}$ | **$6.4789\text{ m}$** | $4.6977\text{ m}$ | $1910.56\text{ m}$ | Non-divergent ($-4.6\%$ vs ESKF) |
+| Sequence | Platform / Dynamic Regime | Filter ATE (m) | Null Baseline ATE (m) | Filter RPE 1s (m) | Null RPE 1s (m) | Naive ATE (m) | Gate (ATE vs Null) | Gate (RPE) |
+| :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| **`MH_01_easy`** | EuRoC Hexacopter | **$3.6326\text{ m}$** | $4.3076\text{ m}$ | **$0.5288\text{ m}$** | $0.4990\text{ m}$ | $34.61\text{ m}$ | **PASS** | Competitive |
+| **`V1_01_easy`** | Agile Room Flight | **$2.4199\text{ m}$** | $1.8545\text{ m}$ | **$0.4385\text{ m}$** | $0.4356\text{ m}$ | $> 1000\text{ m}$ | Competitive | Competitive |
+| **`V2_02_medium`** | High-Speed Industrial Flight | **$2.6199\text{ m}$** | $2.1109\text{ m}$ | **$0.7123\text{ m}$** | $0.7535\text{ m}$ | $80.12\text{ m}$ | Competitive | **PASS** |
+| **`circle`** | Synthetic Orbit ($R=3\text{m}$) | **$4.4534\text{ m}$** | $4.4534\text{ m}$ | **$1.9867\text{ m}$** | $1.9867\text{ m}$ | $13.92\text{ m}$ | **PASS** | **PASS** |
+| **`figure_eight`** | Synthetic High Dynamics | **$1.6500\text{ m}$** | $2.0662\text{ m}$ | **$0.9688\text{ m}$** | $1.0024\text{ m}$ | $6.75\text{ m}$ | **PASS** | **PASS** |
+| **`TUM-VI room2`** | Handheld / MAV Rig | **$4.7399\text{ m}$** | $1.2182\text{ m}$ | **$1.1566\text{ m}$** | $0.9557\text{ m}$ | $906.21\text{ m}$ | Stable ($-42\%$ vs ESKF) | Stable |
+| **`TUM-VI room1`** | Handheld Walking Rig | **$16.0961\text{ m}$** | $1.0010\text{ m}$ | **$1.7301\text{ m}$** | $0.9139\text{ m}$ | $744.06\text{ m}$ | Stable ($-46\%$ vs ESKF) | Stable ($-76\%$ RPE) |
+| **`UZH-FPV fwd7`** | Agile Quadrotor (500 Hz, 59k rows) | **$8.0288\text{ m}$** | $6.3522\text{ m}$ | **$4.8905\text{ m}$** | $4.6977\text{ m}$ | $1910.56\text{ m}$ | Stable ($-50\%$ vs ESKF) | Competitive |
 
 ### 11.2 Cross-Validation Suite (35 Randomized Degradation Trials)
 Evaluated across 5 trajectories, 3 degradation presets (nominal, severe jamming, extreme dropout), and 3 random seeds:
 
 | Sequence / Group | Count | Mean ATE (m) | Median ATE (m) | P95 ATE (m) | Worst ATE (m) | Mean RPE 1s (m) |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: |
-| **`MH_01_easy`** | 7 | 7.7444 | 3.6725 | 23.2014 | 30.4247 | 0.6442 |
-| **`V1_01_easy`** | 7 | 7.4883 | 1.8902 | 27.8159 | 37.5746 | 0.5493 |
-| **`V2_02_medium`** | 7 | 8.1357 | 3.6729 | 27.6277 | 36.9159 | 0.9522 |
-| **`circle`** | 7 | 4.1038 | 4.2925 | 4.4264 | 4.4534 | 2.2089 |
-| **`figure_eight`** | 7 | 1.7093 | 1.7410 | 2.0410 | 2.0619 | 1.1366 |
-| **OVERALL SUITE** | **35** | **$5.8363\text{ m}$** | **$3.3230\text{ m}$** | **$32.3721\text{ m}$** | **$37.5746\text{ m}$** | **$1.0983\text{ m}$** |
+| **`MH_01_easy`** | 7 | 7.7403 | 3.6711 | 23.2294 | 30.4918 | 0.6440 |
+| **`V1_01_easy`** | 7 | 7.4747 | 1.8560 | 27.8245 | 37.5865 | 0.5474 |
+| **`V2_02_medium`** | 7 | 7.8024 | 2.5960 | 27.7248 | 36.9853 | 0.9145 |
+| **`circle`** | 7 | 4.0983 | 4.2924 | 4.4264 | 4.4534 | 2.2085 |
+| **`figure_eight`** | 7 | 1.7113 | 1.7527 | 2.0407 | 2.0620 | 1.1367 |
+| **OVERALL SUITE** | **35** | **$5.7654\text{ m}$** | **$3.0928\text{ m}$** | **$32.4398\text{ m}$** | **$37.5865\text{ m}$** | **$1.0902\text{ m}$** |
 
 ---
 

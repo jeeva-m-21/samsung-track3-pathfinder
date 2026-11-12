@@ -24,7 +24,7 @@
   "cov_diag_floor": 1e-12,
   "cov_diag_cap": 1000000.0,
   "tilt_tau_a": 0.21426320932326784,
-  "tilt_omega_max": 1.0,
+  "tilt_omega_max": 2.2,
   "tilt_sigma": 0.028113238138092616,
   "zupt_window_s": 0.25,
   "zupt_gyro_mean": 0.03,

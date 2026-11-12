@@ -54,7 +54,15 @@ def compute_null_baseline(gt_path: str) -> tuple:
     rms_disp = float(np.sqrt(np.mean(np.array(disp_1s)**2))) if disp_1s else 0.0
     return spread, rms_disp
 
-def run_suite(binary: str = "./main"):
+def run_suite(binary: str = None):
+    if binary is None:
+        for candidate in ["./main", "src/main", "src/build/main"]:
+            if os.path.exists(candidate) and os.access(candidate, os.X_OK):
+                binary = candidate
+                break
+        if binary is None:
+            subprocess.run(["make", "-C", "src"], check=True)
+            binary = "./main"
     results = {}
     print(f"| {'Sequence':<15} | {'Filter ATE':<11} | {'Null ATE':<10} | {'Filter RPE':<11} | {'Null RPE':<10} | {'Gate (ATE)':<10} | {'Gate (RPE)':<10} |")
     print("|" + "-"*17 + "|" + "-"*13 + "|" + "-"*12 + "|" + "-"*13 + "|" + "-"*12 + "|" + "-"*12 + "|" + "-"*12 + "|")

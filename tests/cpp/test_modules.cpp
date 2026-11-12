@@ -75,8 +75,8 @@ static void test_tilt_update() {
     bool rej_acc = apply_tilt_update(state, P, bad_acc, omega, 1.0, g_w);
     TEST_ASSERT(!rej_acc, "Tilt update should be rejected when acceleration deviates from g");
 
-    // High angular velocity should fail gating (|omega| > 1.0 rad/s)
-    Vec3 bad_omega = make_vec3(1.5, 0.0, 0.0);
+    // High angular velocity should fail gating (|omega| > omega_max)
+    Vec3 bad_omega = make_vec3(params::tilt_omega_max + 0.5, 0.0, 0.0);
     bool rej_gyro = apply_tilt_update(state, P, acc, bad_omega, 1.0, g_w);
     TEST_ASSERT(!rej_gyro, "Tilt update should be rejected when angular velocity exceeds omega_max");
 }
