@@ -31,20 +31,29 @@ static Vec3 s_pos_pass1[MAX_TRAJECTORY_SAMPLES];
 struct TrajectoryCollector {
     FILE* tmp_file;
     size_t count;
+    bool active;
 
     struct Record {
         int64_t t_ns;
         double qx, qy, qz, qw;
     };
 
-    TrajectoryCollector() : tmp_file(std::tmpfile()), count(0) {}
+    TrajectoryCollector() : tmp_file(std::tmpfile()), count(0), active(true) {}
     ~TrajectoryCollector() {
         if (tmp_file) {
             std::fclose(tmp_file);
         }
     }
 
+    void reset() {
+        count = 0;
+        if (tmp_file) {
+            std::rewind(tmp_file);
+        }
+    }
+
     void write_pose(int64_t t_ns, double px, double py, double pz, double qx, double qy, double qz, double qw) {
+        if (!active) return;
         if (count < MAX_TRAJECTORY_SAMPLES) {
             s_pos_pass1[count] = math::make_vec3(px, py, pz);
             count++;
@@ -883,10 +892,20 @@ int run_eskf_full(const char* input_path,
     double q_acc_mult = params::noise_mult_acc;
 
     TrajectoryCollector collector;
+    bool enable_two_pass = false;
+    Vec3 refined_bg = math::make_vec3(0.0, 0.0, 0.0);
+    Vec3 refined_ba = math::make_vec3(0.0, 0.0, 0.0);
+    bool has_refined_bias = false;
+    double dt_nom = 0.005;
+    size_t stream_count = 0;
 
-    auto process_full_step = [&](int64_t t_curr,
-                                 const Vec3& omega_curr,
-                                 const Vec3& acc_curr) {
+    for (int pass = 1; pass <= (enable_two_pass ? 2 : 1); ++pass) {
+        bool is_pass1 = (enable_two_pass && pass == 1);
+        collector.active = !is_pass1;
+
+        auto process_full_step = [&](int64_t t_curr,
+                                     const Vec3& omega_curr,
+                                     const Vec3& acc_curr) {
         if (blind_predictor.is_failed()) {
             Vec3 p_blind;
             Quat q_blind;
@@ -988,6 +1007,10 @@ int run_eskf_full(const char* input_path,
                 q_gyro_mult = params::noise_mult_gyro * scale_g;
                 q_acc_mult = params::noise_mult_acc * scale_a;
 
+                if (has_refined_bias) {
+                    state.b_g = refined_bg;
+                }
+
                 for (size_t idx = 0; idx < init_count; ++idx) {
                     int64_t t_smp = s_init_buf[idx].t_ns;
                     Vec3 w_smp = s_init_buf[idx].omega;
@@ -1040,8 +1063,36 @@ int run_eskf_full(const char* input_path,
 
     delay_buf.flush(collector);
 
-    size_t stream_count = collector.count;
-    double dt_nom = (gap_handler.dt_nom() > 0.0) ? gap_handler.dt_nom() : 0.005;
+    if (is_pass1) {
+        refined_bg = state.b_g;
+        refined_ba = state.b_a;
+        if (std::isfinite(refined_bg.norm()) && refined_bg.norm() < 0.2 &&
+            std::isfinite(refined_ba.norm()) && refined_ba.norm() < 0.5) {
+            has_refined_bias = true;
+        }
+        reader.rewind();
+        initializer.reset();
+        gap_handler.reset();
+        monitor.reset();
+        blind_predictor.reset();
+        stat_buf.clear();
+        tilt_filter = Butterworth2LowPass();
+        delay_buf.clear();
+        collector.reset();
+        init_count = 0;
+        is_initialized = false;
+        was_in_gap = false;
+        state = NominalState::zeros();
+        P = Mat15::identity();
+        t0_ns = 0;
+        prev_t_ns = 0;
+        continue;
+    }
+
+    stream_count = collector.count;
+    dt_nom = (gap_handler.dt_nom() > 0.0) ? gap_handler.dt_nom() : 0.005;
+    break;
+    } // end for pass
 
     // Determine if IMU failure occurred during the stream
     size_t active_count = stream_count;

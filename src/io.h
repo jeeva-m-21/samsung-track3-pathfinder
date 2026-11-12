@@ -45,6 +45,7 @@ public:
 
     bool open(const char* filepath);
     void close();
+    void rewind();
 
     // Streaming iterator: yields next row with a timestamp
     // Returns false on EOF or unrecoverable error

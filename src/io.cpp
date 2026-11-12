@@ -277,6 +277,19 @@ void IMUReader::close() {
     }
 }
 
+void IMUReader::rewind() {
+    if (file_) {
+        std::rewind(file_);
+        buf_pos_ = 0;
+        buf_len_ = 0;
+        eof_reached_ = false;
+        total_lines_read_ = 0;
+        valid_count_ = 0;
+        invalid_count_ = 0;
+        skipped_timestamps_ = 0;
+    }
+}
+
 bool IMUReader::read_line(char* out_line, size_t max_len) {
     if (!file_ || max_len == 0) {
         return false;
