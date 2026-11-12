@@ -69,6 +69,7 @@ constexpr bool enable_rotor_drag = false;
 constexpr double rotor_drag_kd = 0.20;
 constexpr double rotor_drag_sigma = 0.50;
 constexpr double rotor_drag_gate = 12.0;
+constexpr bool enable_centripetal_comp = true;
 
 } // namespace params
 

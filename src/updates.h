@@ -21,6 +21,14 @@ void compute_tilt_innovation(const NominalState& state,
                              Vec3& y,
                              Vec3& h_hat);
 
+void compute_tilt_innovation(const NominalState& state,
+                             const Vec3& acc,
+                             const Vec3& omega,
+                             const Vec3& g_w,
+                             Vec3& y,
+                             Vec3& h_hat,
+                             double comp_gain = 0.2);
+
 // Build 3x15 tilt measurement Jacobian matrix H (SPEC §12.5)
 Mat3x15 build_tilt_h_matrix(const Vec3& h_hat);
 

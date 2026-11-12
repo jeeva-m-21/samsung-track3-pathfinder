@@ -23,12 +23,33 @@ void compute_tilt_innovation(const NominalState& state,
                              const Vec3& g_w,
                              Vec3& y,
                              Vec3& h_hat) {
-    Vec3 a_unbiased = acc - state.b_a;
-    double norm_a = a_unbiased.norm();
+    compute_tilt_innovation(state, acc, math::make_vec3(0.0, 0.0, 0.0), g_w, y, h_hat);
+}
+
+void compute_tilt_innovation(const NominalState& state,
+                             const Vec3& acc,
+                             const Vec3& omega,
+                             const Vec3& g_w,
+                             Vec3& y,
+                             Vec3& h_hat,
+                             double comp_gain) {
+    Mat3 R_bw = state.q.to_rot_mat();
+    Vec3 a_eff = acc - state.b_a;
+    if (params::enable_centripetal_comp && comp_gain > 0.0) {
+        Vec3 v_body = R_bw.transpose() * state.v;
+        Vec3 a_centripetal = math::cross(omega, v_body) * comp_gain;
+        double a_c_norm = a_centripetal.norm();
+        if (a_c_norm > 15.0) {
+            a_centripetal *= (15.0 / a_c_norm);
+        }
+        a_eff = a_eff - a_centripetal;
+    }
+
+    double norm_a = a_eff.norm();
     if (norm_a < 1e-12) {
         norm_a = 1e-12;
     }
-    Vec3 z = a_unbiased / norm_a;
+    Vec3 z = a_eff / norm_a;
 
     Vec3 up = math::make_vec3(0.0, 0.0, 1.0);
     double g_norm = g_w.norm();
@@ -36,11 +57,17 @@ void compute_tilt_innovation(const NominalState& state,
         up = -g_w / g_norm;
     }
 
-    // R_bw maps body to world; R_bw.transpose() maps world to body
-    Mat3 R_bw = state.q.to_rot_mat();
     h_hat = R_bw.transpose() * up;
-
     y = z - h_hat;
+}
+
+void compute_tilt_innovation(const NominalState& state,
+                             const Vec3& acc,
+                             const Vec3& omega,
+                             const Vec3& g_w,
+                             Vec3& y,
+                             Vec3& h_hat) {
+    compute_tilt_innovation(state, acc, omega, g_w, y, h_hat, 0.2);
 }
 
 Mat3x15 build_tilt_h_matrix(const Vec3& h_hat) {
@@ -70,12 +97,26 @@ bool apply_tilt_update(NominalState& state,
         g_mag = 9.80665;
     }
 
-    if (!tilt_gating(acc, omega, g_mag, quality)) {
+    double q_clamped = (quality < 0.0) ? 0.0 : ((quality > 1.0) ? 1.0 : quality);
+    double comp_gain = 0.2 * q_clamped * q_clamped;
+    Vec3 a_gating = acc;
+    if (params::enable_centripetal_comp && comp_gain > 0.0) {
+        Mat3 R_bw = state.q.to_rot_mat();
+        Vec3 v_body = R_bw.transpose() * state.v;
+        Vec3 a_centripetal = math::cross(omega, v_body) * comp_gain;
+        double a_c_norm = a_centripetal.norm();
+        if (a_c_norm > 15.0) {
+            a_centripetal *= (15.0 / a_c_norm);
+        }
+        a_gating = acc - a_centripetal;
+    }
+
+    if (!tilt_gating(a_gating, omega, g_mag, quality)) {
         return false;
     }
 
     Vec3 y, h_hat;
-    compute_tilt_innovation(state, acc, g_w, y, h_hat);
+    compute_tilt_innovation(state, acc, omega, g_w, y, h_hat, comp_gain);
     Mat3x15 H = build_tilt_h_matrix(h_hat);
     double omega_norm = omega.norm();
     double omega_ratio = omega_norm / params::tilt_omega_max;
