@@ -41,6 +41,44 @@ NominalState strapdown_step(const NominalState& state,
     return new_state;
 }
 
+NominalState strapdown_step_midpoint(const NominalState& state,
+                                     const Vec3& omega,
+                                     const Vec3& acc,
+                                     double dt,
+                                     const Vec3& g_w) {
+    if (dt <= 0.0) {
+        return state;
+    }
+
+    Vec3 omega_hat = omega - state.b_g;
+    Vec3 a_hat = acc - state.b_a;
+
+    // Midpoint orientation rotation: R_mid = R(q * exp(0.5 * omega_hat * dt))
+    Quat delta_q_half = exp_map(omega_hat * (0.5 * dt));
+    Quat q_mid = normalize(state.q * delta_q_half);
+    Mat3 R_mid = to_rot_mat(q_mid);
+
+    // Full step orientation
+    Quat delta_q = exp_map(omega_hat * dt);
+    Quat q_new = normalize(state.q * delta_q);
+    ensure_continuity(q_new, state.q);
+
+    Vec3 a_w = R_mid * a_hat + g_w;
+
+    double dt_sq_half = 0.5 * (dt * dt);
+    Vec3 p_new = state.p + state.v * dt + a_w * dt_sq_half;
+    Vec3 v_new = state.v + a_w * dt;
+
+    NominalState new_state;
+    new_state.p = p_new;
+    new_state.v = v_new;
+    new_state.q = q_new;
+    new_state.b_g = state.b_g;
+    new_state.b_a = state.b_a;
+
+    return new_state;
+}
+
 Mat15 build_f_matrix(const NominalState& state,
                      const Vec3& omega,
                      const Vec3& acc,

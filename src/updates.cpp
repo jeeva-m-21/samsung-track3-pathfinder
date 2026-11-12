@@ -268,6 +268,20 @@ bool apply_zupt_update(NominalState& state,
     return joseph_update(state, P, H, y, R, gate_threshold);
 }
 
+bool apply_zaru_update(NominalState& state,
+                       Mat15& P,
+                       const Vec3& omega_curr,
+                       double r_scale) {
+    Vec3 y = omega_curr - state.b_g;
+    Mat3x15 H = Mat3x15::zeros();
+    H.set_block<3, 3>(0, 9, Mat3::identity());
+    double sigma_zaru = 0.005;
+    double var_z = (sigma_zaru * sigma_zaru) * r_scale;
+    Mat3 R = Mat3::identity() * var_z;
+
+    return joseph_update(state, P, H, y, R, 1e9);
+}
+
 bool apply_velocity_bounding(NominalState& state,
                              Mat15& P,
                              double max_speed,

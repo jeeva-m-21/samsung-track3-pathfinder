@@ -97,6 +97,12 @@ bool apply_zupt_update(NominalState& state,
                        double gate_threshold = 1e9,
                        double r_scale = 1.0);
 
+// Zero Angular Rate Update (ZARU) measurement update during stillness
+bool apply_zaru_update(NominalState& state,
+                       Mat15& P,
+                       const Vec3& omega_curr,
+                       double r_scale = 1.0);
+
 // Soft velocity bounding pseudo-measurement update
 bool apply_velocity_bounding(NominalState& state,
                              Mat15& P,

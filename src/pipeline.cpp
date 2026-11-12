@@ -920,7 +920,7 @@ int run_eskf_full(const char* input_path,
         double dt = static_cast<double>(t_curr - prev_t_ns) * 1e-9;
         prev_t_ns = t_curr;
 
-        state = strapdown_step(state, omega_curr, acc_curr, dt, g_w);
+        state = strapdown_step_midpoint(state, omega_curr, acc_curr, dt, g_w);
         Mat15 F = build_f_matrix(state, omega_curr, acc_curr, dt);
         Mat15 Q = build_q_matrix(dt, params::noise_mult_gyro, params::noise_mult_acc,
                                  params::walk_mult_bg, params::walk_mult_ba, monitor.kappa());
