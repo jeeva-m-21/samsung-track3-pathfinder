@@ -77,7 +77,10 @@ bool apply_tilt_update(NominalState& state,
     Vec3 y, h_hat;
     compute_tilt_innovation(state, acc, g_w, y, h_hat);
     Mat3x15 H = build_tilt_h_matrix(h_hat);
-    Mat3 R = build_tilt_r_matrix(quality, r_scale);
+    double omega_norm = omega.norm();
+    double omega_ratio = omega_norm / params::tilt_omega_max;
+    double omega_inflation = 1.0 + 3.0 * (omega_ratio * omega_ratio);
+    Mat3 R = build_tilt_r_matrix(quality, r_scale * omega_inflation);
 
     return joseph_update(state, P, H, y, R, gate_threshold);
 }

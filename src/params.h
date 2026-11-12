@@ -61,8 +61,9 @@ constexpr bool enable_velocity_bounding = true;
 constexpr double max_velocity_mps = 3.0;
 constexpr double velocity_bounding_sigma = 0.2;
 constexpr int64_t delayed_output_frames = 512;
-constexpr bool enable_two_pass_filter = true;
+constexpr bool enable_two_pass_filter = false;
 constexpr double two_pass_cutoff_period = 45.0;
+constexpr double tau_ou = 1.8;
 
 } // namespace params
 

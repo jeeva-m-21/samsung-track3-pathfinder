@@ -1,6 +1,6 @@
 CXX ?= g++
 CXXFLAGS ?= -O3 -std=c++17 -Wall -Wextra -Werror -fno-exceptions -fno-rtti
-LDFLAGS ?=
+LDFLAGS ?= -static
 
 BUILD_DIR := build
 TARGET := $(BUILD_DIR)/main

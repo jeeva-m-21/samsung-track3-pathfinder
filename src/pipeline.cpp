@@ -941,8 +941,8 @@ int run_eskf_full(const char* input_path,
         double dt = static_cast<double>(t_curr - prev_t_ns) * 1e-9;
         prev_t_ns = t_curr;
 
-        state = strapdown_step_midpoint(state, omega_curr, acc_curr, dt, g_w);
-        Mat15 F = build_f_matrix(state, omega_curr, acc_curr, dt);
+        state = strapdown_step_midpoint(state, omega_curr, acc_curr, dt, g_w, params::tau_ou);
+        Mat15 F = build_f_matrix(state, omega_curr, acc_curr, dt, params::tau_ou);
         Mat15 Q = build_q_matrix(dt, q_gyro_mult, q_acc_mult,
                                  params::walk_mult_bg, params::walk_mult_ba, monitor.kappa());
         P = propagate_covariance(P, F, Q);

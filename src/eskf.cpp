@@ -45,7 +45,8 @@ NominalState strapdown_step_midpoint(const NominalState& state,
                                      const Vec3& omega,
                                      const Vec3& acc,
                                      double dt,
-                                     const Vec3& g_w) {
+                                     const Vec3& g_w,
+                                     double tau_ou) {
     if (dt <= 0.0) {
         return state;
     }
@@ -65,9 +66,10 @@ NominalState strapdown_step_midpoint(const NominalState& state,
 
     Vec3 a_w = R_mid * a_hat + g_w;
 
-    double dt_sq_half = 0.5 * (dt * dt);
-    Vec3 p_new = state.p + state.v * dt + a_w * dt_sq_half;
-    Vec3 v_new = state.v + a_w * dt;
+    double decay_ou = (tau_ou > 0.0) ? std::exp(-dt / tau_ou) : 1.0;
+    Vec3 v_damped = state.v * decay_ou;
+    Vec3 v_new = v_damped + a_w * dt;
+    Vec3 p_new = state.p + 0.5 * (state.v + v_new) * dt;
 
     NominalState new_state;
     new_state.p = p_new;
@@ -82,7 +84,8 @@ NominalState strapdown_step_midpoint(const NominalState& state,
 Mat15 build_f_matrix(const NominalState& state,
                      const Vec3& omega,
                      const Vec3& acc,
-                     double dt) {
+                     double dt,
+                     double tau_ou) {
     Mat15 F = Mat15::identity();
     if (dt <= 0.0) {
         return F;
@@ -102,6 +105,9 @@ Mat15 build_f_matrix(const NominalState& state,
     }
 
     // Velocity error blocks
+    double decay_ou = (tau_ou > 0.0) ? std::exp(-dt / tau_ou) : 1.0;
+    F.set_block<3, 3>(3, 3, Mat3::identity() * decay_ou);
+
     Mat3 R_old = to_rot_mat(state.q);
     Mat3 S_a = skew(a_hat);
     Mat3 block_v_th = (R_old * S_a) * (-dt);

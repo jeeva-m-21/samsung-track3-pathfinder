@@ -13,18 +13,20 @@ NominalState strapdown_step(const NominalState& state,
                             double dt,
                             const Vec3& g_w);
 
-// 1b. Midpoint nominal strapdown state propagation (avoids orientation lag)
+// 1b. Midpoint nominal strapdown state propagation with optional OU velocity prior
 NominalState strapdown_step_midpoint(const NominalState& state,
                                      const Vec3& omega,
                                      const Vec3& acc,
                                      double dt,
-                                     const Vec3& g_w);
+                                     const Vec3& g_w,
+                                     double tau_ou = 0.0);
 
 // 2. Analytical 15x15 error-state transition matrix F (SPEC §12.4)
 Mat15 build_f_matrix(const NominalState& state,
                      const Vec3& omega,
                      const Vec3& acc,
-                     double dt);
+                     double dt,
+                     double tau_ou = 0.0);
 
 // 3. Discrete 15x15 process noise covariance matrix Q (SPEC §12.4)
 Mat15 build_q_matrix(double dt,
