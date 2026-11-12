@@ -17,7 +17,7 @@
   "noise_mult_acc": 5.320683277986699,
   "walk_mult_bg": 3.9488605605282023,
   "walk_mult_ba": 35.80135071389043,
-  "enable_centripetal_comp": true,
+  "enable_centripetal_comp": false,
   "sigma_g_base": 0.00017,
   "sigma_a_base": 0.002,
   "sigma_bg_base": 1.9e-05,

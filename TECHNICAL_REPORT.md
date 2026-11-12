@@ -406,26 +406,26 @@ We verified our candidate InEKF engine across **11 benchmark sequences** represe
 
 | Sequence | Platform / Dynamic Regime | Filter ATE (m) | Null Baseline ATE (m) | Filter RPE 1s (m) | Null RPE 1s (m) | Naive ATE (m) | Gate (ATE vs Null) | Gate (RPE) |
 | :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| **`MH_01_easy`** | EuRoC Hexacopter | **$3.6297\text{ m}$** | $4.3076\text{ m}$ | **$0.5287\text{ m}$** | $0.4990\text{ m}$ | $34.61\text{ m}$ | **PASS** | Competitive |
-| **`V1_01_easy`** | Agile Room Flight | **$2.4214\text{ m}$** | $1.8545\text{ m}$ | **$0.4385\text{ m}$** | $0.4356\text{ m}$ | $> 1000\text{ m}$ | Competitive | Competitive |
-| **`V2_02_medium`** | High-Speed Industrial Flight | **$2.6149\text{ m}$** | $2.1109\text{ m}$ | **$0.7119\text{ m}$** | $0.7535\text{ m}$ | $80.12\text{ m}$ | Competitive | **PASS** |
+| **`MH_01_easy`** | EuRoC Hexacopter | **$3.6326\text{ m}$** | $4.3076\text{ m}$ | **$0.5288\text{ m}$** | $0.4990\text{ m}$ | $34.61\text{ m}$ | **PASS** | Competitive |
+| **`V1_01_easy`** | Agile Room Flight | **$2.4199\text{ m}$** | $1.8545\text{ m}$ | **$0.4385\text{ m}$** | $0.4356\text{ m}$ | $> 1000\text{ m}$ | Competitive | Competitive |
+| **`V2_02_medium`** | High-Speed Industrial Flight | **$2.6199\text{ m}$** | $2.1109\text{ m}$ | **$0.7123\text{ m}$** | $0.7535\text{ m}$ | $80.12\text{ m}$ | Competitive | **PASS** |
 | **`circle`** | Synthetic Orbit ($R=3\text{m}$) | **$4.4534\text{ m}$** | $4.4534\text{ m}$ | **$1.9867\text{ m}$** | $1.9867\text{ m}$ | $13.92\text{ m}$ | **PASS** | **PASS** |
 | **`figure_eight`** | Synthetic High Dynamics | **$1.6500\text{ m}$** | $2.0662\text{ m}$ | **$0.9688\text{ m}$** | $1.0024\text{ m}$ | $6.75\text{ m}$ | **PASS** | **PASS** |
-| **`TUM-VI room2`** | Handheld / MAV Rig | **$4.7716\text{ m}$** | $1.2182\text{ m}$ | **$1.1442\text{ m}$** | $0.9557\text{ m}$ | $906.21\text{ m}$ | Stable ($-42\%$ vs ESKF) | Stable |
-| **`TUM-VI room1`** | Handheld Walking Rig | **$18.3847\text{ m}$** | $1.0010\text{ m}$ | **$1.6136\text{ m}$** | $0.9139\text{ m}$ | $744.06\text{ m}$ | Stable ($-46\%$ vs ESKF) | Stable ($-78\%$ RPE) |
-| **`UZH-FPV fwd7`** | Agile Quadrotor (500 Hz, 59k rows) | **$10.7534\text{ m}$** | $6.3522\text{ m}$ | **$5.0629\text{ m}$** | $4.6977\text{ m}$ | $1910.56\text{ m}$ | Stable ($-42\%$ vs ESKF) | Competitive |
+| **`TUM-VI room2`** | Handheld / MAV Rig | **$4.7399\text{ m}$** | $1.2182\text{ m}$ | **$1.1566\text{ m}$** | $0.9557\text{ m}$ | $906.21\text{ m}$ | Stable ($-42\%$ vs ESKF) | Stable |
+| **`TUM-VI room1`** | Handheld Walking Rig | **$16.0961\text{ m}$** | $1.0010\text{ m}$ | **$1.7301\text{ m}$** | $0.9139\text{ m}$ | $744.06\text{ m}$ | Stable ($-46\%$ vs ESKF) | Stable ($-76\%$ RPE) |
+| **`UZH-FPV fwd7`** | Agile Quadrotor (500 Hz, 59k rows) | **$8.0288\text{ m}$** | $6.3522\text{ m}$ | **$4.8905\text{ m}$** | $4.6977\text{ m}$ | $1910.56\text{ m}$ | Stable ($-50\%$ vs ESKF) | Competitive |
 
 ### 11.2 Cross-Validation Suite (35 Randomized Degradation Trials)
 Evaluated across 5 trajectories, 3 degradation presets (nominal, severe jamming, extreme dropout), and 3 random seeds:
 
 | Sequence / Group | Count | Mean ATE (m) | Median ATE (m) | P95 ATE (m) | Worst ATE (m) | Mean RPE 1s (m) |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: |
-| **`MH_01_easy`** | 7 | 7.7403 | 3.6707 | 23.2316 | 30.4945 | 0.6438 |
-| **`V1_01_easy`** | 7 | 7.4727 | 1.8542 | 27.8172 | 37.5781 | 0.5474 |
-| **`V2_02_medium`** | 7 | 7.8170 | 2.5851 | 27.8500 | 37.2069 | 0.9142 |
-| **circle** | 7 | 4.0993 | 4.2924 | 4.4269 | 4.4534 | 2.2086 |
-| **figure_eight** | 7 | 1.7114 | 1.7527 | 2.0407 | 2.0620 | 1.1362 |
-| **OVERALL SUITE** | **35** | **$5.7681\text{ m}$** | **$3.0921\text{ m}$** | **$32.5082\text{ m}$** | **$37.5781\text{ m}$** | **$1.0901\text{ m}$** |
+| **`MH_01_easy`** | 7 | 7.7403 | 3.6711 | 23.2294 | 30.4918 | 0.6440 |
+| **`V1_01_easy`** | 7 | 7.4747 | 1.8560 | 27.8245 | 37.5865 | 0.5474 |
+| **`V2_02_medium`** | 7 | 7.8024 | 2.5960 | 27.7248 | 36.9853 | 0.9145 |
+| **circle** | 7 | 4.0983 | 4.2924 | 4.4264 | 4.4534 | 2.2085 |
+| **figure_eight** | 7 | 1.7113 | 1.7527 | 2.0407 | 2.0620 | 1.1367 |
+| **OVERALL SUITE** | **35** | **$5.7654\text{ m}$** | **$3.0928\text{ m}$** | **$32.4398\text{ m}$** | **$37.5865\text{ m}$** | **$1.0902\text{ m}$** |
 
 ---
 

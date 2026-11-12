@@ -20,11 +20,11 @@
   },
   "performance_metrics": {
     "objective_J": 0.1364,
-    "improvement_vs_naive_pct": 89.51,
-    "ate_rmse_m": 3.6297,
+    "improvement_vs_naive_pct": 89.50,
+    "ate_rmse_m": 3.6326,
     "blind_5s_rmse_m": 5.7608,
     "dropout_rmse_m": 6.8851,
-    "rpe_1s_rmse_m": 0.5287
+    "rpe_1s_rmse_m": 0.5288
   },
   "commit": "f9d0b9b"
 }
