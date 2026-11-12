@@ -27,7 +27,9 @@ DATASETS = [
     ('V2_02_medium', 'data/euroc/V2_02_medium/mav0/imu0/data.csv', 'data/euroc/gt/V2_02_medium.txt'),
     ('circle', 'data/synth/circle.csv', 'data/synth/circle_gt.txt'),
     ('figure_eight', 'data/synth/figure_eight.csv', 'data/synth/figure_eight_gt.txt'),
-    ('TUM-VI room1', 'data/tumvi/room1/mav0/imu0/data.csv', 'data/tumvi/gt_room1.txt')
+    ('TUM-VI room1', 'data/tumvi/room1/mav0/imu0/data.csv', 'data/tumvi/gt_room1.txt'),
+    ('TUM-VI room2', 'data/tumvi/room2/mav0/imu0/data.csv', 'data/tumvi/gt_room2.txt'),
+    ('UZH-FPV fwd7', 'data/uzh_fpv/imu_indoor_forward_7.csv', 'data/uzh_fpv/gt_indoor_forward_7.txt')
 ]
 
 def compute_null_baseline(gt_path: str) -> tuple:
