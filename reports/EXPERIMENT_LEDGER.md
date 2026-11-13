@@ -464,3 +464,68 @@ Reason: Violates Acceptance Rule 1 (target Blind 5s and Gap 2s improved by only 
 ```
 
 ---
+
+## EXP-E50: [Tier 5] Parameter Search (Held-Out LOOCV Tuning on best-006)
+
+- **Date / commit:** 2026-11-13 / `fb32ebf` (parent `best-006` `4200484`)
+- **Hypothesis:** Following the integration of the E22 causal 3-sample median gyro spike filter into `best-006`, high-amplitude spurious rotation spikes are suppressed. This shifts the optimal filter tuning frontier:
+  1. Spurious centrifugal velocity projections are reduced, permitting tighter velocity bounding (`velocity_bounding_sigma`: 0.20 -> 0.1015 m/s) without causing false clamping during genuine motion.
+  2. Spurious high gyro rates no longer trigger excessive rotor drag damping, enabling lower drag coupling (`rotor_drag_kd`: 0.20 -> 0.0668) which preserves genuine flight momentum during blackouts.
+  3. Pedestrian pseudo-measurements can be relaxed along vertical axis while tightening lateral constraints (`ped_sigma_lat`: 0.50 -> 0.3520 m/s, `ped_sigma_vert`: 0.30 -> 0.6647 m/s) to match realistic foot gait dynamics.
+  4. Tilt correction filter time-constants and noise parameters (`tilt_tau_a`: 0.214 -> 0.180 s, `tilt_sigma`: 0.028 -> 0.0243 rad) can be sharpened to improve gravity vector tracking.
+  All parameters were tuned strictly using 5-fold Leave-One-Out Cross-Validation (LOOCV) holding out 1 sequence per fold.
+- **Change:**
+  - Updated parameters in `configs/params.json` and generated `src/params.h` via `tools/export_params.py`.
+  - Zero C++ algorithmic or structural changes.
+- **Budget cost:** Zero RSS increase (1,780 KB vs 1,780 KB), zero compute overhead (0.60–0.85 ms/s vs 0.83 ms/s, well within <= 5.0 ms/s), 0 dynamic heap in filter loop, 1 thread.
+- **Dev results (50 paired runs: 5 dev sequences × seeds 1–10 vs `best-006`):**
+  - **Blind 5s RMSE (Target):** 4.7832 m -> 3.7854 m (**-20.86% relative**, delta: -0.9978 m). 95% paired bootstrap CI: `[-1.4314, -0.6093]` m (strictly excludes zero).
+  - **Dropout 2s Gap RMSE (Target):** 6.2004 m -> 5.0901 m (**-17.91% relative**, delta: -1.1103 m). 95% paired bootstrap CI: `[-1.5546, -0.7066]` m (strictly excludes zero).
+  - **Waypoint ATE RMSE:** 2.3093 m -> 2.1051 m (**-8.84% relative**, delta: -0.2042 m). 95% paired bootstrap CI: `[-0.3011, -0.1141]` m (strictly excludes zero).
+  - **Attitude Error:** 74.73° -> 75.93° (**+1.61% relative**, delta: +1.21°), well within the <= +5.0% guard limit.
+  - **Per-sequence Blind 5s deltas:**
+    - MH_01_easy: 4.521 m -> 4.218 m (-6.7%)
+    - V1_01_easy: 1.905 m -> 1.884 m (-1.1%)
+    - V2_02_medium: 3.732 m -> 3.125 m (**-16.3%**)
+    - room1: 3.371 m -> 3.298 m (-2.2%)
+    - room2: 10.387 m -> 6.402 m (**-38.4%**)
+  - **Worst sequence delta across dev set:** MH_01 ATE at +0.4% (well within <= 15% limit).
+- **Reviewer Confirmation Run (50 paired runs: seeds 201–210 vs `best-006`):**
+  - **Blind 5s RMSE (Target):** 4.7745 m -> 4.1340 m (**-13.41% relative**, delta: -0.6405 m). 95% paired bootstrap CI: `[-1.0075, -0.3130]` m (strictly excludes zero). Effect size retains 64.2% of dev gain ($\ge 50\%$).
+  - **Dropout 2s Gap RMSE (Target):** 6.1112 m -> 5.3424 m (**-12.58% relative**, delta: -0.7688 m). 95% paired bootstrap CI: `[-1.1684, -0.4101]` m (strictly excludes zero). Effect size retains 69.2% of dev gain ($\ge 50\%$).
+  - **Waypoint ATE RMSE:** 2.2908 m -> 2.1580 m (**-5.80% relative**, delta: -0.1328 m). 95% paired bootstrap CI: `[-0.2171, -0.0566]` m (strictly excludes zero). Effect size retains 65.0% of dev gain ($\ge 50\%$).
+  - **Attitude Error:** 75.60° -> 77.08° (**+1.96% relative**, delta: +1.48°), well within <= +5.0% guard limit.
+  - **Per-sequence Confirmation Blind 5s deltas:**
+    - MH_01_easy: 4.566 m -> 4.251 m (-6.89%)
+    - V1_01_easy: 1.949 m -> 1.991 m (+2.14%)
+    - V2_02_medium: 3.939 m -> 3.410 m (-13.43%)
+    - room1: 3.992 m -> 4.067 m (+1.89%)
+    - room2: 9.426 m -> 6.951 m (-26.26%)
+- **Decision:** **ACCEPT** (Meets all 8 acceptance criteria: Target Blind gain -20.86% on dev / -13.41% on confirmation $\ge 5.0\%$, CI strictly excludes 0, exceeds 2× noise std; Gap gain -17.91% on dev / -12.58% on confirmation $\ge 5.0\%$; Waypoint ATE improves -8.84% on dev / -5.80% on confirmation; confirmation seeds 201–210 retain 64–69% of dev effect size; zero dynamic heap allocations, all budgets and sanitizers pass).
+
+### Reviewer Checklist (Section 8 / 9)
+
+```
+Reviewer: Reviewer Agent (5db90c77-7a7f-4ddc-890d-0300523ac231)
+Date: 2026-11-13
+Reproduced from commit: fb32ebf
+
+- [x] Hypothesis and physical reason recorded.
+- [x] Single change; diff is minimal (parameter adjustment in configs/params.json and src/params.h).
+- [x] Baseline and new numbers reproduced from a clean checkout, same seeds (seeds 1–10 match worker exactly).
+- [x] Noise floor reported; improvement exceeds 2× std (Blind 5s delta of -0.9978m exceeds 2× noise std of ~0.21m by nearly 5×).
+- [x] Raw-meter scorecard: blind, gap, attitude, per-sequence deltas included.
+- [x] No sequence regressed > 15% (worst dev sequence delta is MH_01 ATE at +0.4%; worst confirmation delta is V1_01 Blind at +2.14%).
+- [x] RSS and ms/s measured on release build with taskset -c 0 (Peak RSS: 1,780 KB, 0.60–0.85 ms/s).
+- [x] Tests, sanitizers, fuzz, format audit all pass (1,246 C++ unit checks, 215 pytest cases, ASan/UBSan clean, format audit valid).
+- [x] Confirmation run on seeds 201–210 holds sign and >= half the effect (Blind -13.41% vs -20.86%, Gap -12.58% vs -17.91%, ATE -5.80% vs -8.84%; all 95% CIs exclude zero).
+- [x] Ledger entry complete; decision follows the acceptance rule.
+- [x] No hard-coded per-dataset constants introduced (tuned strictly across held-out folds using LOOCV).
+
+Decision: ACCEPT
+Reason: Meets all 8 acceptance criteria. Large, statistically significant gains across all three competition metrics (Blind 5s: -20.86% dev / -13.41% confirmation; Gap 2s: -17.91% dev / -12.58% confirmation; ATE: -8.84% dev / -5.80% confirmation); 95% bootstrap CIs all exclude zero; confirmation run on fresh seeds 201–210 preserves effect signs and retains 64–69% effect size; zero compute/memory overhead; all sanitizers, unit tests, and trajectory validations pass.
+```
+
+---
+
+---
