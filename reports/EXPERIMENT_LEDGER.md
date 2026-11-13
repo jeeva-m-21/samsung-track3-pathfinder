@@ -88,3 +88,23 @@
 - **Notes / surprises:** On gentle/hovering sequences (MH_01, room2), holding the pre-gap gyro rate halved blind and gap errors. However, on agile sequences with rapid turns (V2_02, room1), holding an un-decayed turning rate over 1.5 seconds rotates the attitude by up to 90 degrees, causing severe over-rotation. Insight: angular velocity during gaps must be decayed towards zero ($e^{-t/\tau_\omega}$) to prevent over-rotation on dynamic turns.
 
 ---
+
+## EXP-004: Angular Rate Decay during Gap Propagation
+
+- **Date / commit:** 2026-11-13 / `6cbe3dc`
+- **Hypothesis:** Decaying angular velocity exponentially with `tau_omega` during gap sub-stepping (combined with holding pre-gap smoothed gyro) prevents runaway attitude rotation on agile sequences while preserving the 40–50% blind/gap improvements on steady sequences.
+- **Change:** In `src/gap.cpp`, decayed `curr_omega` by `exp(-dt_sub / params::tau_omega)` across gap sub-steps.
+- **Budget cost:** +0 KB RSS, +0 ms/s
+- **Dev results (10 seeds, 5 sequences, LOOCV):**
+  - Suite-wide Gap-2s improved by **-17.75%** (6.625 m -> 5.449 m)
+  - Suite-wide RPE-1s improved by **-8.85%** (0.909 m -> 0.829 m)
+  - MH_01_easy: ATE 3.614m (+5.7%), **Blind5 1.775m (-60.9%)**, **Gap2s 6.697m (-47.4%)**, **RPE1s 0.550m (-16.5%)**
+  - room2: **ATE 1.843m (-43.2%)**, **Blind5 6.249m (-46.5%)**, **Gap2s 5.410m (-50.0%)**, **RPE1s 1.105m (-23.7%)**
+  - V1_01_easy: ATE 1.688m (-1.6%), Blind5 3.142m (+61.5%), Gap2s 3.027m (+59.3%)
+  - V2_02_medium: ATE 2.677m (+18.1%), Blind5 9.080m (+67.3%), Gap2s 5.142m (+13.7%)
+  - room1: ATE 2.188m (+56.0%), Blind5 8.571m (+155.3%), Gap2s 6.970m (+120.4%)
+- **Per-sequence deltas:** Huge 40%–60% gains across all metrics on MH_01 and room2. However, room1 (+56% ATE) and V2_02 (+18% ATE) regressed by > 15%.
+- **Decision:** **PARK** (Tradeoff: passes Condition 1 on suite gap error (-17.75%), but fails Condition 3 on room1 and V2_02).
+- **Notes / surprises:** Decay significantly recovered V2_02 compared to EXP-003 (ATE 3.32m -> 2.68m), but room1 still suffers from dead-reckoning drift during the gap compared to the baseline freeze. Parked; baseline preserved.
+
+---
