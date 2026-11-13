@@ -272,3 +272,47 @@ Reason: Acceptance Rule 1 failure. The target component (Blind 5s RMSE) improved
 ```
 
 ---
+
+## EXP-E11: [Tier 1] Bidirectional Gap Bridge
+
+- **Date / commit:** 2026-11-13 / `69fe841` (parent `best-005` `7a8562f`)
+- **Hypothesis:** Reconstruct trajectory through the 2.0s blackout gap using cubic Hermite spline interpolation on position/velocity and spherical linear interpolation (slerp) on attitude between pre-gap and post-gap boundary states.
+- **Change:**
+  - Implemented `math::slerp()` in `src/quat.h`.
+  - Added delayed-buffer cubic Hermite interpolation and slerp attitude smoothing in `DelayedOutputBuffer::apply_bridge()`.
+  - Added post-gap tilt realignment via `gravity_align_accel` with latch tripwire in `src/pipeline.cpp`.
+  - Extended buffer to store velocities for boundary tangent estimation.
+- **Budget cost:** +108 KB RSS (1,868 KB vs 1,760 KB), +0.00 ms/s (0.66 ms/s), 0 dynamic heap in filter loop, 1 thread.
+- **Dev results (50 runs: 5 dev sequences × 10 seeds):**
+  - **Dropout 2s Gap RMSE (Target):** 6.6250 m -> 6.6181 m (**-0.10% relative**, delta: -0.0069 m). 95% paired bootstrap CI: `[-0.0204, +0.0069]` m (spans zero).
+  - **Waypoint ATE RMSE:** 2.4089 m -> 2.3671 m (**-1.73% relative**).
+  - **Blind 5s RMSE:** 5.3899 m -> 5.3963 m (**+0.12% relative**).
+  - **Attitude Error:** Regressed by **+9.73% overall**, with severe per-sequence regression on MH_01 (36.86° -> 93.17°, **+152.7%**).
+- **Physical Root Cause:**
+  1. The metric `gap_2s_rmse` measures start-anchored error during the gap window ($t=25$s to $27$s). Because open-loop drift from $t=0$ to $25$s already contributes ~6.6 m of absolute offset, local 2-second Hermite bridging only alters the internal chord by 1–2 cm, producing a negligible -0.0069 m delta (-0.10%).
+  2. Attempting to realign post-gap tilt using raw accelerometer gravity projections during recovery corrupted the absolute orientation frame, causing severe long-term attitude divergence (+152.7% on MH_01).
+- **Decision:** **REJECT** (Rule 1 failed: target gain -0.10% < 5%, 95% CI spans zero; Rule 2 failed: attitude error severely worsened by > 5%).
+
+### Reviewer Checklist (Section 8 / 9)
+
+```
+Reviewer: Reviewer Agent (5db90c77-7a7f-4ddc-890d-0300523ac231)
+Date: 2026-11-13
+Reproduced from commit: 69fe841
+
+- [x] Hypothesis and physical reason recorded.
+- [x] Single change; diff is focused on gap bridging and post-gap boundary anchoring.
+- [x] Baseline and new numbers reproduced from a clean checkout, same seeds (seeds 1–10).
+- [x] Noise floor reported; improvement exceeds 2× std (Failed: -0.0069 m is inside noise floor; 2× std is 0.180 m on MH_01, 1.297 m on room1).
+- [x] Raw-meter scorecard: blind, gap, attitude, per-sequence deltas included.
+- [x] No sequence regressed > 15% (Gap metric passes guard, but attitude regressed severely).
+- [x] RSS and ms/s measured on release build with taskset -c 0 (Peak RSS: 1,868 KB, 0.66 ms/s).
+- [x] Tests, sanitizers, fuzz, format audit all pass (1,241 C++ unit checks, 215 pytest cases, ASan/UBSan clean, format audit valid).
+- [x] Ledger entry complete; decision follows the acceptance rule.
+- [x] No hard-coded per-dataset constants introduced.
+
+Decision: REJECT
+Reason: Violates Acceptance Rule 1 (target Gap 2s RMSE improved by only -0.10% relative, failing the >= 5.0% threshold and noise-floor threshold; bootstrap CI [-0.0204, +0.0069] spans zero) and Acceptance Rule 2 (platform attitude error regressed by +9.73% overall and +152.7% on MH_01, violating the <= 5.0% collateral attitude regression threshold).
+```
+
+---
