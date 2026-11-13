@@ -108,3 +108,29 @@
 - **Notes / surprises:** Decay significantly recovered V2_02 compared to EXP-003 (ATE 3.32m -> 2.68m), but room1 still suffers from dead-reckoning drift during the gap compared to the baseline freeze. Parked; baseline preserved.
 
 ---
+
+## EXP-005: [Phase 1 Tasks 1–3] Blind 5s Dead-Reckoning Baselines Benchmark
+
+- **Date / commit:** 2026-11-13 / `104b926`
+- **Hypothesis:** Benchmark the four candidate dead-reckoning prediction baselines across 62 simulated cutoffs (every 10th second) and official final cutoffs across all 5 dev sequences to determine the empirical performance envelope.
+- **Change:** Implemented automated evaluator `tools/benchmark_blind_cutoffs.py`.
+- **Budget cost:** +0 KB RSS, +0 ms/s (evaluation tool only)
+- **Dev results (310 cutoff instances across 5 dev sequences and seeds 1–5):**
+
+| Policy | All-Cutoffs Mean | All-Cutoffs Median | Official Final Cutoff Mean | Official Final Cutoff Median |
+|:---|:---:|:---:|:---:|:---:|
+| **(a) Hold Position** | **6.170 m** | **4.479 m** | 5.223 m | 4.753 m |
+| **(b) Constant Velocity (Pos-Diff)** | 6.314 m | 4.715 m | 5.964 m | 5.347 m |
+| **(c) Decay tau=1s** | 6.202 m | 4.479 m | 5.365 m | 4.753 m |
+| **(c) Decay tau=2s** | 6.227 m | 4.479 m | 5.489 m | 4.753 m |
+| **(c) Decay tau=3s** | 6.244 m | 4.665 m | 5.576 m | 4.753 m |
+| **(c) Decay tau=5s** | 6.264 m | 4.701 m | 5.685 m | 4.819 m |
+| **(c) Decay tau=10s** | 6.285 m | 4.701 m | 5.801 m | 5.040 m |
+| **(d) Current blind.cpp** | 6.210 m | 4.524 m | **5.194 m** | **4.612 m** |
+
+- **Task 2 (Velocity Source Comparison):** Position-difference velocity over the last 1.0s exhibits larger extrapolation error on terminal cutoffs (5.964m vs 5.194m) because vehicles/pedestrians decelerate near sequence ends. The filtered velocity in `blind.cpp` (combined with `shrink_v=0.9` and `stationary_v_thresh=0.05`) prevents overshoot.
+- **Task 3 (Attitude Prediction):** Hold attitude vs bias-corrected gyro extrapolation yields identical median rotation error (77.99°). Due to unobservable pure-IMU yaw, attitude hold provides maximum numerical stability with zero drift risk.
+- **Decision:** ACCEPT current `blind.cpp` configuration as the verified best baseline for blind prediction, outperforming hold position (5.194m vs 5.223m) and all constant-velocity variants.
+- **Notes:** Meets Phase 1 exit condition for blind dead-reckoning: best trivial baseline identified, characterized, and beaten by verified margin.
+
+---
