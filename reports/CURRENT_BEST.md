@@ -1,35 +1,54 @@
 # CURRENT BEST — Track 03 "Path Finder"
 
 **Last updated:** 2026-11-13
-**Current best tag:** `best-006`
-**Commit:** `69e16b7`
-**Phase:** 2 (Degradation Front-End & Filter Hardening)
+**Current best tag:** `best-007`
+**Commit:** `16744c8`
+**Phase:** 5 (Parameter Optimization on Frozen Architecture)
 
 ---
 
 ## Scorecard (Dev Set, 10 seeds 1-10, `./main`)
 
-| Metric | Mean | Median | Delta vs `best-005` | Status & Notes |
+| Metric | Mean | Median | Delta vs `best-006` | Status & Notes |
 |--------|------|--------|---------------------|----------------|
-| **Waypoint ATE RMSE (m)** | **2.309** | 2.155 | **-4.1%** (-0.100 m) | Aligned SE(3) Umeyama; 95% CI excludes 0 ✅ |
-| **Blind 5 s RMSE (m)** | **4.783** | 4.315 | **-7.8%** (-0.607 m) | Target gain exceeds 5%; 95% CI [-1.20, -0.22] m ✅ |
-| **Gap 2 s RMSE (m)** | **6.200** | 4.090 | **-6.4%** (-0.425 m) | Target gain exceeds 5%; 95% CI [-0.95, -0.12] m ✅ |
-| **Peak RSS** | 1,780 KB | — | +20 KB | ✅ Target <= 4.0 MB passed (taskset -c 0) |
-| **Compute** | 0.83 ms/s | — | +0.17 ms/s | ✅ Target <= 5.0 ms/s passed (taskset -c 0) |
+| **Waypoint ATE RMSE (m)** | **2.105** | 1.993 | **-8.8%** (-0.204 m) | Aligned SE(3) Umeyama; 95% CI [-0.301, -0.114] m ✅ |
+| **Blind 5 s RMSE (m)** | **3.785** | 3.419 | **-20.9%** (-0.998 m) | 95% CI [-1.431, -0.609] m (exceeds 4x noise std) ✅ |
+| **Gap 2 s RMSE (m)** | **5.090** | 3.190 | **-17.9%** (-1.110 m) | 95% CI [-1.555, -0.707] m (exceeds 5x noise std) ✅ |
+| **Attitude Error** | 75.93° | 81.98° | +1.61% (+1.21°) | Within <= 5.0% guard limit ✅ |
+| **Peak RSS** | 1,848 KB (1.81 MB) | — | +68 KB | ✅ Target <= 4.0 MB passed (taskset -c 0) |
+| **Compute** | 0.85 ms/s | — | +0.02 ms/s | ✅ Target <= 5.0 ms/s passed (taskset -c 0) |
 
 ---
 
-## Best Filter Configuration (`best-006`)
-- **Spike Front-End:** Causal 3-sample median filter on incoming raw gyroscope data (`src/spike.h`, parameter `enable_spike_filter = true`, `spike_filter_acc = false`). Suppresses impulsive $0.5$ rad/s spikes from `tools/degrade.py` without distorting physical body dynamics or legitimate motor vibration.
-- **Blind Dead-Reckoning:** `blind.cpp` with exponential velocity shrinkage (`shrink_v=0.9`, `tau_v=3.0`, stationary threshold `0.05 m/s`) and orientation hold.
-- **Outlier Resolution:** Completely resolved the historical `room2` seed 8 runaway (ATE 6.13 m $\to$ 2.85 m, Blind 22.6 m $\to$ 10.0 m, Gap 21.4 m $\to$ 9.28 m).
+## Reviewer Confirmation Run (Fresh Confirmation Seeds 201–210)
+Independently confirmed by Reviewer subagent on unseen seeds {201..210}:
+- **Blind 5s RMSE:** **-13.41%** (-0.640 m, 95% CI `[-1.008, -0.313]` m, 64.2% retained effect size ✅)
+- **Gap 2s RMSE:** **-12.58%** (-0.769 m, 95% CI `[-1.168, -0.410]` m, 69.2% retained effect size ✅)
+- **Waypoint ATE RMSE:** **-5.80%** (-0.133 m, 95% CI `[-0.217, -0.057]` m, 65.0% retained effect size ✅)
 
-**Per-Sequence Breakdown (10-seed means):**
+---
 
-| Sequence | Baseline ATE | Cand ATE (`best-006`) | Baseline Blind | Cand Blind (`best-006`) | Baseline Gap | Cand Gap (`best-006`) |
-|----------|:------------:|:---------------------:|:--------------:|:-----------------------:|:------------:|:---------------------:|
-| **MH_01_easy** | 3.418 m | **3.416 m** | 4.549 m | **4.521 m** | 12.723 m | **12.707 m** |
-| **V1_01_easy** | 1.718 m | **1.717 m** | 1.908 m | **1.910 m** | 1.836 m | **1.834 m** |
-| **V2_02_medium** | 2.101 m | **2.101 m** | 3.732 m | **3.732 m** | 3.701 m | **3.722 m** |
-| **room1** | 1.401 m | **1.405 m** | 3.238 m | **3.474 m** | 3.147 m | **3.174 m** |
-| **room2** | 3.407 m | **2.909 m** | 13.522 m | **10.468 m** | 11.819 m | **9.569 m** |
+## Cumulative Progress from Baseline
+
+| Milestone / Tag | Waypoint ATE (m) | Blind 5s (m) | Gap 2s (m) | Peak RSS (MB) | Compute (ms/s) |
+|---|:---:|:---:|:---:|:---:|:---:|
+| **Initial Baseline (`35c3334`)** | 5.787 | 18.065 | 15.654 | 1.76 | 0.66 |
+| **`best-005` (`7a8562f`)** | 2.409 | 5.390 | 6.625 | 1.76 | 0.66 |
+| **`best-006` (`4200484`)** | 2.309 | 4.783 | 6.200 | 1.74 | 0.83 |
+| **`best-007` (Current Best)** | **2.105** | **3.785** | **5.090** | **1.81** | **0.85** |
+| **Total Improvement vs Initial** | **-63.6%** | **-79.0%** | **-67.5%** | **Compliant** | **Compliant** |
+
+---
+
+## Current Best Filter Configuration (`best-007`)
+- **Spike Front-End:** Causal 3-sample median filter on incoming raw gyroscope data (`src/spike.h`, `enable_spike_filter = true`, `spike_filter_acc = false`).
+- **Post-Spike Tuned Parameters:**
+  - `velocity_bounding_sigma`: 0.1015 m/s (tightened velocity constraint envelope)
+  - `max_velocity_mps`: 3.024 m/s (velocity saturation limit)
+  - `rotor_drag_kd`: 0.0668 (calibrated aerodynamic body drag for flight regime)
+  - `rotor_drag_sigma`: 0.8020
+  - `ped_sigma_lat`: 0.3520 m/s (tightened non-holonomic lateral velocity prior)
+  - `ped_sigma_vert`: 0.6647 m/s (relaxed vertical gait vibration constraint)
+  - `tilt_tau_a`: 0.1800 (accelerometer innovation gating time constant)
+  - `tilt_sigma`: 0.0243
+  - `shrink_v`: 0.90, `tau_v`: 3.00, `stationary_v_thresh`: 0.05
