@@ -16,9 +16,14 @@ Outputs:
 import argparse
 import json
 import shutil
+import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 import numpy as np
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
 from tools.synth import quat_exp, quat_to_rot_matrix
 
@@ -126,6 +131,22 @@ def apply_degradations(
         deg_omega += np.cumsum(bg_steps, axis=0)
         deg_acc += np.cumsum(ba_steps, axis=0)
 
+    # 3b. Impulsive sensor spikes
+    spike_rate = float(config.get("spike_rate", 0.0))
+    if spike_rate > 0.0:
+        dt_arr_spike = np.diff(t_s, prepend=t_s[0])
+        dt_arr_spike[0] = dt_arr_spike[1] if len(dt_arr_spike) > 1 else 0.005
+        spike_prob = np.clip(spike_rate * dt_arr_spike, 0.0, 1.0)
+        spike_mask = rng.uniform(0.0, 1.0, size=n) < spike_prob
+        if np.any(spike_mask):
+            num_spikes = int(np.sum(spike_mask))
+            spike_g = float(config.get("spike_gyro", 0.5))
+            spike_a = float(config.get("spike_accel", 5.0))
+            spike_dir_g = rng.choice([-1.0, 1.0], size=(num_spikes, 3))
+            spike_dir_a = rng.choice([-1.0, 1.0], size=(num_spikes, 3))
+            deg_omega[spike_mask] += spike_dir_g * spike_g
+            deg_acc[spike_mask] += spike_dir_a * spike_a
+
     # 4. Dropouts
     dropouts = config.get("dropouts", [])
     valid_mask = np.ones(n, dtype=bool)
@@ -188,6 +209,8 @@ def apply_degradations(
     # Checkpoint times every 10s up to failure time
     checkpoints_s = [round(float(s), 2) for s in np.arange(10.0, failure_time_s, 10.0)]
 
+    gap_2s_windows = [d for d in dropout_sidecars if abs(float(d.get("duration_s", 0.0)) - 2.0) <= 0.2]
+
     sidecar = {
         "seed": seed,
         "duration_s": total_dur_s,
@@ -196,6 +219,7 @@ def apply_degradations(
         "failure_time_s": failure_time_s,
         "failure_t_ns": failure_t_ns,
         "dropout_windows": dropout_sidecars,
+        "gap_2s_window": gap_2s_windows[0] if gap_2s_windows else (dropout_sidecars[0] if dropout_sidecars else None),
         "checkpoints_s": checkpoints_s,
     }
 

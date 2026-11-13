@@ -20,6 +20,10 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 import numpy as np
 
+REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
 from evo.core import metrics, trajectory, sync
 from evo.tools import file_interface
 
@@ -210,6 +214,11 @@ def compute_trajectory_metrics(
     blind5_rmse = 0.0
     blind5_final_err = 0.0
     dropout_rmse = float(ate_rmse_aligned)
+    gap_2s_rmse = float(ate_rmse_aligned)
+    gap_2s_rmse_aligned = float(ate_rmse_aligned)
+    blind5_rmse_aligned = float(ate_rmse_aligned)
+
+    pos_err_aligned = np.linalg.norm(t_est_aligned.positions_xyz - t_ref_sync.positions_xyz, axis=1)
 
     if sidecar_path is not None and Path(sidecar_path).exists():
         with open(sidecar_path, "r", encoding="utf-8") as f:
@@ -231,9 +240,11 @@ def compute_trajectory_metrics(
             if np.any(blind_mask):
                 blind5_rmse = float(np.sqrt(np.mean(pos_err_anchored[blind_mask] ** 2)))
                 blind5_final_err = float(pos_err_anchored[blind_mask][-1])
+                blind5_rmse_aligned = float(np.sqrt(np.mean(pos_err_aligned[blind_mask] ** 2)))
             else:
                 blind5_rmse = float(pos_err_anchored[-1])
                 blind5_final_err = float(pos_err_anchored[-1])
+                blind5_rmse_aligned = float(pos_err_aligned[-1])
 
         # Dropouts
         dropouts = sidecar.get("dropout_windows", [])
@@ -248,6 +259,26 @@ def compute_trajectory_metrics(
             if drop_errs:
                 dropout_rmse = float(np.sqrt(np.mean(np.array(drop_errs) ** 2)))
 
+        # 2-second gap blackout
+        gap_info = sidecar.get("gap_2s_window")
+        if not gap_info and dropouts:
+            candidates = [d for d in dropouts if abs(float(d.get("duration_s", 0.0)) - 2.0) <= 0.2]
+            if candidates:
+                gap_info = candidates[0]
+            else:
+                gap_info = max(dropouts, key=lambda d: float(d.get("duration_s", 0.0)))
+
+        if gap_info:
+            g_start = float(gap_info["start_s"])
+            g_end = float(gap_info["end_s"])
+            g_mask = (t_ref_s[:min_len] >= g_start) & (t_ref_s[:min_len] <= g_end)
+            if np.any(g_mask):
+                gap_2s_rmse = float(np.sqrt(np.mean(pos_err_anchored[g_mask] ** 2)))
+                gap_2s_rmse_aligned = float(np.sqrt(np.mean(pos_err_aligned[g_mask] ** 2)))
+            else:
+                gap_2s_rmse = dropout_rmse
+                gap_2s_rmse_aligned = ate_rmse_aligned
+
     return {
         "ate_rmse_aligned": ate_rmse_aligned,
         "ate_rmse_unaligned": ate_rmse_unaligned,
@@ -259,7 +290,10 @@ def compute_trajectory_metrics(
         "checkpoint_err": checkpoint_err,
         "blind5_rmse": blind5_rmse,
         "blind5_final_err": blind5_final_err,
+        "blind5_rmse_aligned": blind5_rmse_aligned,
         "dropout_rmse": dropout_rmse,
+        "gap_2s_rmse": gap_2s_rmse,
+        "gap_2s_rmse_aligned": gap_2s_rmse_aligned,
         "rot_err_deg": rot_err_deg,
     }
 

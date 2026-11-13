@@ -716,7 +716,7 @@ int run_naive(const char* input_path,
         int64_t t_k = sample.t_ns;
         double dt = static_cast<double>(t_k - prev_t_ns) * 1e-9;
         prev_t_ns = t_k;
-        if (dt > 0.0 && dt < 10.0) {
+        if (dt > 0.0 && dt < 10.0 && sample.is_valid) {
             if (dt_count < 200) {
                 dt_samples[dt_count++] = dt;
             }
@@ -1262,6 +1262,11 @@ int run_eskf_full(const char* input_path,
     bool has_refined_bias = false;
     double dt_nom = 0.005;
     size_t stream_count = 0;
+    double vibe_ema = 0.0;
+    double ped_energy = 0.0;
+    double dyn_acc_ema = 0.0;
+    Vec3 prev_acc_raw = math::make_vec3(0.0, 0.0, 0.0);
+    bool has_prev_acc = false;
 
     for (int pass = 1; pass <= (enable_two_pass ? 2 : 1); ++pass) {
         bool is_pass1 = (enable_two_pass && pass == 1);
@@ -1305,6 +1310,31 @@ int run_eskf_full(const char* input_path,
         double dt = static_cast<double>(t_curr - prev_t_ns) * 1e-9;
         prev_t_ns = t_curr;
 
+        bool acc_finite = std::isfinite(acc_curr(0)) && std::isfinite(acc_curr(1)) && std::isfinite(acc_curr(2));
+        if (acc_finite) {
+            if (!has_prev_acc) {
+                prev_acc_raw = acc_curr;
+                has_prev_acc = true;
+            } else {
+                double d_a = (acc_curr - prev_acc_raw).norm();
+                if (std::isfinite(d_a)) {
+                    vibe_ema = (1.0 - 0.02) * vibe_ema + 0.02 * d_a;
+                    double dev_a = std::abs(acc_curr.norm() - g_mag);
+                    ped_energy = (1.0 - 0.01) * ped_energy + 0.01 * (dev_a * dev_a);
+                    if (monitor.quality() >= 0.5 && dev_a < 12.0) {
+                        double a_excess = std::max(0.0, acc_curr.norm() - g_mag);
+                        dyn_acc_ema = (1.0 - 0.05) * dyn_acc_ema + 0.05 * a_excess;
+                    }
+                    prev_acc_raw = acc_curr;
+                }
+            }
+        }
+        bool is_flight = (vibe_ema > params::flight_vibe_thresh);
+        bool is_pedestrian = (!is_flight && ped_energy > params::ped_energy_thresh);
+        double dynamic_envelope = params::max_velocity_mps + (is_flight ? 1.0 : 0.0) * dyn_acc_ema;
+        if (dynamic_envelope > 15.0) dynamic_envelope = 15.0;
+        double max_v = is_flight ? dynamic_envelope : (is_pedestrian ? params::ped_max_velocity_mps : dynamic_envelope);
+
 #ifdef ENABLE_ORACLES
         double cur_tau_ou = options.disable_tau_ou ? 0.0 : params::tau_ou;
 #else
@@ -1333,20 +1363,24 @@ int run_eskf_full(const char* input_path,
             }
             if (is_stat && !options.disable_zupt) {
                 apply_zupt_update(state, P, 1e9, step_res.r_scale);
-            } else if (params::enable_rotor_drag) {
+            } else if (is_flight && params::enable_rotor_drag) {
                 apply_rotor_drag_update(state, P, acc_curr, omega_curr, g_w, params::rotor_drag_kd, params::rotor_drag_sigma, params::rotor_drag_gate);
+            } else if (is_pedestrian && params::enable_pedestrian_prior) {
+                apply_pedestrian_prior(state, P, params::ped_sigma_lat, params::ped_sigma_vert, params::ped_gate_threshold);
             }
             if (!options.disable_vel_bound) {
-                vel_bounded = apply_velocity_bounding(state, P);
+                vel_bounded = apply_velocity_bounding(state, P, max_v);
             }
 #else
             tilt_applied = apply_tilt_update(state, P, acc_filt, omega_curr, monitor.quality(), g_w, 1e9, step_res.r_scale);
             if (is_stat) {
                 apply_zupt_update(state, P, 1e9, step_res.r_scale);
-            } else if (params::enable_rotor_drag) {
+            } else if (is_flight && params::enable_rotor_drag) {
                 apply_rotor_drag_update(state, P, acc_curr, omega_curr, g_w, params::rotor_drag_kd, params::rotor_drag_sigma, params::rotor_drag_gate);
+            } else if (is_pedestrian && params::enable_pedestrian_prior) {
+                apply_pedestrian_prior(state, P, params::ped_sigma_lat, params::ped_sigma_vert, params::ped_gate_threshold);
             }
-            vel_bounded = apply_velocity_bounding(state, P);
+            vel_bounded = apply_velocity_bounding(state, P, max_v);
 #endif
         }
 

@@ -49,6 +49,8 @@ from src.ref.monitor import DegradationMonitor
 from src.ref.updates import (
     Butterworth2LowPass,
     StationaryWindowBuffer,
+    apply_pedestrian_prior,
+    apply_rotor_drag_update,
     apply_velocity_bounding,
     tilt_update,
     zupt_step,
@@ -274,6 +276,11 @@ def run_eskf_full(
     g_mag: float = 9.80665
     t0_ns: int = 0
     prev_t_ns: int = 0
+    vibe_ema: float = 0.0
+    ped_energy: float = 0.0
+    dyn_acc_ema: float = 0.0
+    prev_acc_raw = np.zeros(3, dtype=np.float64)
+    has_prev_acc: bool = False
 
     with open(out_path, "w", encoding="utf-8") as f_out:
         f_out.write("# timestamp tx ty tz qx qy qz qw\n")
@@ -282,6 +289,7 @@ def run_eskf_full(
 
         def process_full_step(t_curr: int, omega_curr: np.ndarray, acc_curr: np.ndarray) -> None:
             nonlocal state, P, prev_t_ns, was_in_gap
+            nonlocal vibe_ema, ped_energy, dyn_acc_ema, prev_acc_raw, has_prev_acc
             assert state is not None and P is not None and g_w is not None
 
             if blind_predictor.is_failed:
@@ -314,6 +322,32 @@ def run_eskf_full(
             dt = (t_curr - prev_t_ns) * 1e-9
             prev_t_ns = t_curr
 
+            acc_arr = np.asarray(acc_curr, dtype=np.float64).reshape(3)
+            if np.all(np.isfinite(acc_arr)):
+                if not has_prev_acc:
+                    prev_acc_raw = acc_arr.copy()
+                    has_prev_acc = True
+                else:
+                    d_a = float(np.linalg.norm(acc_arr - prev_acc_raw))
+                    if np.isfinite(d_a):
+                        vibe_ema = 0.98 * vibe_ema + 0.02 * d_a
+                        dev_a = abs(float(np.linalg.norm(acc_arr)) - g_mag)
+                        ped_energy = 0.99 * ped_energy + 0.01 * (dev_a * dev_a)
+                        if monitor.quality >= 0.5 and dev_a < 12.0:
+                            a_excess = max(0.0, float(np.linalg.norm(acc_arr)) - g_mag)
+                            dyn_acc_ema = 0.95 * dyn_acc_ema + 0.05 * a_excess
+                        prev_acc_raw = acc_arr.copy()
+
+            flight_thresh = float(cfg.get("flight_vibe_thresh", 0.4))
+            ped_thresh = float(cfg.get("ped_energy_thresh", 0.2))
+            is_flight = vibe_ema > flight_thresh
+            is_pedestrian = (not is_flight) and (ped_energy > ped_thresh)
+
+            dyn_env = float(cfg.get("max_velocity_mps", 3.0)) + (1.0 if is_flight else 0.0) * dyn_acc_ema
+            if dyn_env > 15.0:
+                dyn_env = 15.0
+            max_v = dyn_env if is_flight else (float(cfg.get("ped_max_velocity_mps", 3.5)) if is_pedestrian else dyn_env)
+
             state = strapdown_step(state, omega_curr, acc_curr, dt, g_w)
             F = build_f_matrix(state, omega_curr, acc_curr, dt)
             Q = build_q_discrete(dt, cfg, kappa=monitor.kappa)
@@ -340,7 +374,23 @@ def run_eskf_full(
                         g_mag=g_mag, quality=monitor.quality,
                         params=cfg, r_scale=step_res.r_scale,
                     )
-                state, P, _ = apply_velocity_bounding(state, P, params=cfg)
+                elif is_flight and bool(cfg.get("enable_rotor_drag", True)):
+                    state, P, _ = apply_rotor_drag_update(
+                        state, P, acc_curr, omega_curr, g_w,
+                        kd=float(cfg.get("rotor_drag_kd", 0.22)),
+                        sigma=float(cfg.get("rotor_drag_sigma", 0.8)),
+                        gate_threshold=float(cfg.get("rotor_drag_gate", 12.0)),
+                        params=cfg,
+                    )
+                elif is_pedestrian and bool(cfg.get("enable_pedestrian_prior", True)):
+                    state, P, _ = apply_pedestrian_prior(
+                        state, P,
+                        sigma_lat=float(cfg.get("ped_sigma_lat", 0.5)),
+                        sigma_vert=float(cfg.get("ped_sigma_vert", 0.3)),
+                        gate_threshold=float(cfg.get("ped_gate_threshold", 9.0)),
+                        params=cfg,
+                    )
+                state, P, _ = apply_velocity_bounding(state, P, max_speed=max_v, params=cfg)
 
             if was_in_gap:
                 delay_buf.apply_bridge(state.p)
@@ -535,6 +585,11 @@ def run_eskf_basic(
     g_mag: float = 9.80665
     t0_ns: int = 0
     prev_t_ns: int = 0
+    vibe_ema: float = 0.0
+    ped_energy: float = 0.0
+    dyn_acc_ema: float = 0.0
+    prev_acc_raw = np.zeros(3, dtype=np.float64)
+    has_prev_acc: bool = False
     dt_samples = []
 
     with open(out_path, "w", encoding="utf-8") as f_out:

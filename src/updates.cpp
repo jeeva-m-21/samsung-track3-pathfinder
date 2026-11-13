@@ -118,10 +118,23 @@ bool apply_tilt_update(NominalState& state,
     Vec3 y, h_hat;
     compute_tilt_innovation(state, acc, omega, g_w, y, h_hat, comp_gain);
     Mat3x15 H = build_tilt_h_matrix(h_hat);
+
+    // Dynamic noise scaling based on linear acceleration residual and gyro rate
+    double acc_norm = a_gating.norm();
+    double delta_a = std::abs(acc_norm - g_mag);
+    double a_scale = (params::tilt_a_scale > 1e-6) ? params::tilt_a_scale : params::tilt_tau_a;
+    double a_ratio = delta_a / a_scale;
+
     double omega_norm = omega.norm();
-    double omega_ratio = omega_norm / params::tilt_omega_max;
-    double omega_inflation = 1.0 + 3.0 * (omega_ratio * omega_ratio);
-    Mat3 R = build_tilt_r_matrix(quality, r_scale * omega_inflation);
+    double omega_scale = (params::tilt_omega_scale > 1e-6) ? params::tilt_omega_scale : params::tilt_omega_max;
+    double omega_ratio = omega_norm / omega_scale;
+
+    double dynamic_scale = 1.0 + params::tilt_alpha_a * (a_ratio * a_ratio)
+                               + params::tilt_alpha_omega * (omega_ratio * omega_ratio);
+    if (dynamic_scale > 1e6) {
+        dynamic_scale = 1e6;
+    }
+    Mat3 R = build_tilt_r_matrix(quality, r_scale * dynamic_scale);
 
     return joseph_update(state, P, H, y, R, gate_threshold);
 }
@@ -228,7 +241,7 @@ bool StationaryBuffer::is_stationary(double g_mag,
     }
 
     double mean_gyro_norm = sum_gyro_norm / static_cast<double>(k);
-    double zupt_gyro_limit = params::zupt_gyro_mean;
+    double zupt_gyro_limit = (params::zupt_omega_thresh > 0.0) ? params::zupt_omega_thresh : params::zupt_gyro_mean;
     if (mean_gyro_norm >= zupt_gyro_limit) {
         return false;
     }
@@ -359,7 +372,7 @@ bool apply_rotor_drag_update(NominalState& state,
                              Mat15& P,
                              const Vec3& acc,
                              const Vec3& omega,
-                             const Vec3& g_w,
+                             const Vec3& /*g_w*/,
                              double kd,
                              double sigma_drag,
                              double gate_threshold) {
@@ -367,52 +380,86 @@ bool apply_rotor_drag_update(NominalState& state,
         return false;
     }
 
-    if (omega.norm() > 2.0) {
+    if (omega.norm() > 2.5) {
         return false;
     }
 
-    Mat3 R_bw = state.q.to_rot_mat();
-    Vec3 a_unbiased_body = acc - state.b_a;
-    Vec3 a_world = (R_bw * a_unbiased_body) + g_w;
-
-    double a_norm = a_unbiased_body.norm();
-    if (a_norm < 5.0 || a_norm > 20.0) {
+    Vec3 a_b = acc - state.b_a;
+    double a_norm = a_b.norm();
+    if (a_norm < 3.0 || a_norm > 35.0) {
         return false;
     }
 
-    Vec3 y = math::make_vec3(a_world(0) + kd * state.v(0),
-                             a_world(1) + kd * state.v(1),
+    Mat3 R = state.q.to_rot_mat();
+    Mat3 R_T = R.transpose();
+    Vec3 v_b = R_T * state.v;
+
+    // Physical rotor drag in body horizontal axes:
+    // a_xy^b ≈ - kd * v_xy^b  ==>  y = a_xy^b + kd * v_xy^b
+    Vec3 y = math::make_vec3(a_b(0) + kd * v_b(0),
+                             a_b(1) + kd * v_b(1),
                              0.0);
 
+    // Decouple P_pv and P_vp cross-covariance blocks so velocity pseudo-measurement
+    // does not inject unphysical position jumps/kicks
+    P.set_block<3, 3>(6, 3, Mat3::zeros());
+    P.set_block<3, 3>(3, 6, Mat3::zeros());
+
     Mat3x15 H = Mat3x15::zeros();
+
+    // H_v: dy / d(delta_v) = - kd * (R^T)_{0:2, :}
+    // Rotor drag directly constrains velocity without corrupting gravity-anchored attitude
     Mat3 H_v = Mat3::zeros();
-    H_v(0, 0) = -kd;
-    H_v(1, 1) = -kd;
+    for (size_t r = 0; r < 2; ++r) {
+        for (size_t c = 0; c < 3; ++c) {
+            H_v(r, c) = -kd * R_T(r, c);
+        }
+    }
     H.set_block<3, 3>(0, 3, H_v);
 
-    Vec3 a_rot = R_bw * a_unbiased_body;
-    Mat3 S_arot = math::skew(a_rot);
-    Mat3 H_th = Mat3::zeros();
-    H_th(0, 0) = S_arot(0, 0);
-    H_th(0, 1) = S_arot(0, 1);
-    H_th(0, 2) = S_arot(0, 2);
-    H_th(1, 0) = S_arot(1, 0);
-    H_th(1, 1) = S_arot(1, 1);
-    H_th(1, 2) = S_arot(1, 2);
-    H.set_block<3, 3>(0, 0, H_th);
-
-    Mat3 H_ba = Mat3::zeros();
-    H_ba(0, 0) = R_bw(0, 0);
-    H_ba(0, 1) = R_bw(0, 1);
-    H_ba(0, 2) = R_bw(0, 2);
-    H_ba(1, 0) = R_bw(1, 0);
-    H_ba(1, 1) = R_bw(1, 1);
-    H_ba(1, 2) = R_bw(1, 2);
-    H.set_block<3, 3>(0, 12, H_ba);
-
     double var_drag = sigma_drag * sigma_drag;
-    Mat3 R = Mat3::identity() * var_drag;
-    R(2, 2) = 1e8;
+    Mat3 R_cov = Mat3::identity() * var_drag;
+    R_cov(2, 2) = 1e8;
 
-    return joseph_update(state, P, H, y, R, gate_threshold);
+    return joseph_update(state, P, H, y, R_cov, gate_threshold);
+}
+
+bool apply_pedestrian_prior(NominalState& state,
+                            Mat15& P,
+                            double sigma_lat,
+                            double sigma_vert,
+                            double gate_threshold) {
+    if (!params::enable_pedestrian_prior) {
+        return false;
+    }
+
+    // Decouple P_pv and P_vp cross-covariance blocks
+    P.set_block<3, 3>(6, 3, Mat3::zeros());
+    P.set_block<3, 3>(3, 6, Mat3::zeros());
+
+    Mat3 R = state.q.to_rot_mat();
+    Mat3 R_T = R.transpose();
+    Vec3 v_b = R_T * state.v;
+
+    // Pedestrian motion prior:
+    // 1. Lateral body velocity is near zero (v_y^b ≈ 0)
+    // 2. World vertical velocity is near zero (v_z^w ≈ 0)
+    Vec3 y = math::make_vec3(-v_b(1), -state.v(2), 0.0);
+
+    Mat3x15 H = Mat3x15::zeros();
+
+    Mat3 H_v = Mat3::zeros();
+    for (size_t c = 0; c < 3; ++c) {
+        H_v(0, c) = R_T(1, c);
+    }
+    // Row 1: world vertical velocity
+    H_v(1, 2) = 1.0;
+    H.set_block<3, 3>(0, 3, H_v);
+
+    Mat3 R_cov = Mat3::identity();
+    R_cov(0, 0) = sigma_lat > 0.0 ? (sigma_lat * sigma_lat) : 1e8;
+    R_cov(1, 1) = sigma_vert * sigma_vert;
+    R_cov(2, 2) = 1e8;
+
+    return joseph_update(state, P, H, y, R_cov, gate_threshold);
 }

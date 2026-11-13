@@ -127,4 +127,11 @@ bool apply_rotor_drag_update(NominalState& state,
                              double sigma_drag = params::rotor_drag_sigma,
                              double gate_threshold = params::rotor_drag_gate);
 
+// Pedestrian motion prior (lateral non-holonomic constraint + vertical damping)
+bool apply_pedestrian_prior(NominalState& state,
+                            Mat15& P,
+                            double sigma_lat = params::ped_sigma_lat,
+                            double sigma_vert = params::ped_sigma_vert,
+                            double gate_threshold = params::ped_gate_threshold);
+
 #endif // UPDATES_H

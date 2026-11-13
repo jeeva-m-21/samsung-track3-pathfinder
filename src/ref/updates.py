@@ -230,7 +230,27 @@ def tilt_update(
 
     y, h_hat = compute_tilt_innovation(state, acc)
     H = build_tilt_h_matrix(h_hat)
-    R = build_tilt_r_matrix(quality=quality, params=p_cfg, r_scale=r_scale)
+
+    # Dynamic noise scaling based on linear acceleration residual and gyro rate
+    acc_arr = np.asarray(acc, dtype=np.float64).reshape(3)
+    omega_arr = np.asarray(omega, dtype=np.float64).reshape(3)
+    acc_norm = float(np.linalg.norm(acc_arr))
+    delta_a = abs(acc_norm - float(g_mag))
+    a_scale = float(p_cfg.get("tilt_a_scale", p_cfg.get("tilt_tau_a", 0.3)))
+    a_ratio = delta_a / a_scale if a_scale > 1e-6 else 0.0
+
+    omega_norm = float(np.linalg.norm(omega_arr))
+    omega_scale = float(p_cfg.get("tilt_omega_scale", p_cfg.get("tilt_omega_max", 1.0)))
+    omega_ratio = omega_norm / omega_scale if omega_scale > 1e-6 else 0.0
+
+    alpha_a = float(p_cfg.get("tilt_alpha_a", 2.0))
+    alpha_omega = float(p_cfg.get("tilt_alpha_omega", 8.0))
+
+    dynamic_scale = 1.0 + alpha_a * (a_ratio * a_ratio) + alpha_omega * (omega_ratio * omega_ratio)
+    if dynamic_scale > 1e6:
+        dynamic_scale = 1e6
+
+    R = build_tilt_r_matrix(quality=quality, params=p_cfg, r_scale=r_scale * dynamic_scale)
 
     new_state, new_P, delta_x = eskf_measurement_update(
         state, P, H, y, R, params=p_cfg, apply_reset=apply_reset
@@ -288,14 +308,14 @@ def zupt_detect_stationary(
     if n == 0 or len(a_arr) != n:
         return False
 
-    # 1. Mean gyro norm and latest sample gating (prevent stationary clamp when ||omega - b_g|| > 0.015)
-    gyro_thresh = min(float(p_cfg.get("zupt_gyro_mean", 0.03)), 0.015)
+    # 1. Mean gyro norm and latest sample gating
+    gyro_thresh = float(p_cfg.get("zupt_omega_thresh", p_cfg.get("zupt_gyro_mean", 0.02)))
     gyro_norms = np.linalg.norm(g_arr, axis=1)
     mean_gyro = float(np.mean(gyro_norms))
     if mean_gyro >= gyro_thresh:
         return False
 
-    if float(gyro_norms[-1]) > 0.015:
+    if float(gyro_norms[-1]) > gyro_thresh * 1.5:
         return False
 
     # 2. Accel norm deviation from g_mag
@@ -658,4 +678,107 @@ def apply_velocity_bounding(
 
     updated_state, updated_P, _ = eskf_measurement_update(state, P_decoupled, H_v, y_v, R_v)
     return updated_state, updated_P, True
+
+
+def apply_rotor_drag_update(
+    state: NominalState,
+    P: np.ndarray,
+    acc_raw: np.ndarray,
+    omega_raw: np.ndarray,
+    g_w: np.ndarray,
+    kd: float = 0.22,
+    sigma: float = 0.8,
+    gate_threshold: float = 12.0,
+    params: Optional[Dict[str, Any]] = None,
+) -> Tuple[NominalState, np.ndarray, bool]:
+    """Rotor drag measurement update for multirotor drone flight."""
+    if params is not None and not bool(params.get("enable_rotor_drag", True)):
+        return state, P, False
+
+    R_b2w = quat_to_rot_matrix(state.q)
+    R_w2b = R_b2w.T
+
+    acc_arr = np.asarray(acc_raw, dtype=np.float64).reshape(3)
+    f_b_xy = acc_arr[:2] - state.b_a[:2]
+    v_b = R_w2b @ state.v
+    v_b_xy = v_b[:2]
+
+    # Innovation: y = a_xy^b + kd * v_xy^b
+    y = f_b_xy + kd * v_b_xy
+
+    # Decouple P_pv and P_vp cross covariance
+    P_decoupled = P.copy()
+    P_decoupled[6:9, 3:6] = 0.0
+    P_decoupled[3:6, 6:9] = 0.0
+
+    # H_v = -kd * R_b2w(0:2, :)^T => shape (2, 15)
+    H = np.zeros((2, 15), dtype=np.float64)
+    for i in range(2):
+        for j in range(3):
+            H[i, 3 + j] = -kd * R_b2w[j, i]
+
+    R_drag = (sigma ** 2) * np.eye(2, dtype=np.float64)
+
+    # Check innovation gate: S = H @ P @ H.T + R
+    S = H @ P_decoupled @ H.T + R_drag
+    try:
+        S_inv = np.linalg.inv(S)
+    except np.linalg.LinAlgError:
+        return state, P, False
+    gamma = float(y.T @ S_inv @ y)
+    if gate_threshold > 0.0 and gamma > gate_threshold:
+        return state, P, False
+
+    updated_state, updated_P, _ = eskf_measurement_update(
+        state, P_decoupled, H, y, R_drag, params=params
+    )
+    return updated_state, updated_P, True
+
+
+def apply_pedestrian_prior(
+    state: NominalState,
+    P: np.ndarray,
+    sigma_lat: float = 0.5,
+    sigma_vert: float = 0.3,
+    gate_threshold: float = 9.0,
+    params: Optional[Dict[str, Any]] = None,
+) -> Tuple[NominalState, np.ndarray, bool]:
+    """Pedestrian kinematic motion prior (lateral non-holonomic and vertical damping)."""
+    if params is not None and not bool(params.get("enable_pedestrian_prior", True)):
+        return state, P, False
+
+    R_b2w = quat_to_rot_matrix(state.q)
+    R_w2b = R_b2w.T
+
+    v_b = R_w2b @ state.v
+    v_lat = v_b[1]
+    v_vert = state.v[2]
+
+    # Innovation: y = target - current = [0 - v_lat, 0 - v_vert]^T = [-v_lat, -v_vert]^T
+    y = np.array([-v_lat, -v_vert], dtype=np.float64)
+
+    P_decoupled = P.copy()
+    P_decoupled[6:9, 3:6] = 0.0
+    P_decoupled[3:6, 6:9] = 0.0
+
+    H = np.zeros((2, 15), dtype=np.float64)
+    H[0, 3:6] = R_w2b[1, :]
+    H[1, 3 + 2] = 1.0
+
+    R_ped = np.diag([sigma_lat ** 2, sigma_vert ** 2])
+
+    S = H @ P_decoupled @ H.T + R_ped
+    try:
+        S_inv = np.linalg.inv(S)
+    except np.linalg.LinAlgError:
+        return state, P, False
+    gamma = float(y.T @ S_inv @ y)
+    if gate_threshold > 0.0 and gamma > gate_threshold:
+        return state, P, False
+
+    updated_state, updated_P, _ = eskf_measurement_update(
+        state, P_decoupled, H, y, R_ped, params=params
+    )
+    return updated_state, updated_P, True
+
 

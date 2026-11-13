@@ -123,15 +123,14 @@ def run_naive_baseline(
 
         for k in range(n):
             t_curr = t_arr[k]
+            w_k = omega_arr[k]
+            a_k = acc_arr[k]
             if k == 0:
                 dt = 0.0
             else:
                 dt = (t_curr - t_arr[k - 1]) * 1e-9
 
-            if dt > 0.0 and dt < 10.0:  # Valid time increment
-                w_k = omega_arr[k]
-                a_k = acc_arr[k]
-
+            if dt > 0.0 and dt < 10.0 and not (np.isnan(w_k).any() or np.isnan(a_k).any()):  # Valid time increment and valid data
                 # Update orientation
                 delta_q = quat_exp(w_k * dt)
                 q_new = quat_mult(q, delta_q)

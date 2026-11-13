@@ -528,3 +528,50 @@ def test_pure_functions_immutability(nominal_state_and_cov, default_params):
 
     assert np.allclose(state.v, state_v_orig)
     assert np.allclose(P, P_orig)
+
+
+def test_rotor_drag_update(nominal_state_and_cov, default_params):
+    """Verify rotor drag measurement update reduces horizontal body velocity discrepancy."""
+    from src.ref.updates import apply_rotor_drag_update
+    state, P = nominal_state_and_cov
+    # Set forward velocity: vx = 5.0 m/s in body frame
+    state.v = np.array([5.0, 0.0, 0.0], dtype=np.float64)
+    # Under rotor drag, forward body accel is negative: a_x^b = -kd * v_x^b = -0.22 * 5.0 = -1.1 m/s^2
+    acc_raw = np.array([-1.1, 0.0, 9.80665], dtype=np.float64)
+    omega_raw = np.zeros(3, dtype=np.float64)
+    g_w = np.array([0.0, 0.0, 9.80665], dtype=np.float64)
+
+    new_state, new_P, applied = apply_rotor_drag_update(
+        state, P, acc_raw, omega_raw, g_w, kd=0.22, sigma=0.8, gate_threshold=12.0
+    )
+    assert applied is True
+    # Innovation y = a_xy + kd * v_xy = -1.1 + 0.22 * 5.0 = 0.0 -> no change to state
+    assert np.allclose(new_state.v, state.v, atol=1e-3)
+
+    # Now if measured body accel does not match (e.g. body accel is 0.0 while v = 5.0)
+    acc_discrepant = np.array([0.0, 0.0, 9.80665], dtype=np.float64)
+    new_state2, new_P2, applied2 = apply_rotor_drag_update(
+        state, P, acc_discrepant, omega_raw, g_w, kd=0.22, sigma=0.8, gate_threshold=12.0
+    )
+    assert applied2 is True
+    # Since H_v = -kd * R^T, innovation y = 0.0 + 1.1 = +1.1, delta_v should reduce vx
+    assert new_state2.v[0] < state.v[0]
+
+
+def test_pedestrian_prior(nominal_state_and_cov, default_params):
+    """Verify pedestrian kinematic prior damps lateral and vertical velocity."""
+    from src.ref.updates import apply_pedestrian_prior
+    state, P = nominal_state_and_cov
+    # Lateral slip vy = 0.6 m/s, vertical bounce vz = 0.3 m/s, forward vx = 1.2 m/s
+    state.v = np.array([1.2, 0.6, 0.3], dtype=np.float64)
+
+    new_state, new_P, applied = apply_pedestrian_prior(
+        state, P, sigma_lat=0.5, sigma_vert=0.3, gate_threshold=9.0
+    )
+    assert applied is True
+    # Lateral and vertical velocities should be damped toward zero
+    assert abs(new_state.v[1]) < abs(state.v[1])
+    assert abs(new_state.v[2]) < abs(state.v[2])
+    # Forward velocity should remain relatively unperturbed
+    assert abs(new_state.v[0] - state.v[0]) < 0.2
+
