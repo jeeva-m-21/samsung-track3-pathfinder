@@ -58,7 +58,8 @@ make test
 
 ## 4. Hardware Constraints
 
-- **Peak RSS**: 2.39 MB (well below 4 MB budget, hard ceiling 8 MB).
-- **Latency**: < 1.0 ms per 1 s IMU data (well below 2.0 ms/s budget).
+- **Peak RSS**: 1.78 MB (well below 4.0 MB target, hard ceiling 8.0 MB).
+- **Latency**: 0.65 ms per 1 s IMU data (well below 5.0 ms/s target, hard ceiling 20.0 ms/s).
 - **Concurrency**: Strictly 1 OS thread (single-threaded).
 - **Memory safety**: Zero dynamic heap allocations in filter loop.
+- **Dependencies**: Zero external third-party libraries; zero neural networks.

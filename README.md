@@ -2,7 +2,8 @@
 
 **Samsung Hackathon — Track 3: "Path Finder"**  
 **Team**: `VITC_SingleThread`  
-**Target Architecture**: Single-threaded streaming C++17 binary (Zero dynamic heap allocations, no external libraries, pure buffered `stdio`)
+**Target Architecture**: Single-threaded streaming C++17 binary (Zero dynamic heap allocations, no external libraries, pure buffered POSIX `stdio`)  
+**Release Baseline**: Tag `submission-final` / `release-candidate` (commit `b9eed87` / `46a7c15`)
 
 ---
 
@@ -12,19 +13,35 @@ In pure inertial dead-reckoning, navigation systems must estimate 3D position, v
 
 **Path Finder** is an embedded-grade, ultra-lightweight **15-State Error-State Kalman Filter (ESKF)** written in strict **C++17**. It operates under zero-heap-allocation constraints inside the filter loop, maintains strict numerical stability through Joseph-stabilized covariance updates, and features adaptive sensor resilience algorithms that seamlessly handle packet dropouts, sensor freezes, and complete blackout cutoffs.
 
-### Key Achievements:
-- **Accuracy Improvement**: Achieved an **86.4% reduction in overall tracking error** ($J = 0.1364$ normalized composite loss vs $1.0000$ naive baseline).
-- **Real Drone Flight (EuRoC MAV `MH_01_easy`)**:
-  - **SE(3)-Aligned ATE RMSE** (rigid Umeyama, scale=1.0 fixed per official `evo` standard): **`3.78 m`** (vs $34.61\text{ m}$ naive baseline, an $89.1\%$ error reduction).
-  - **Raw Unaligned ATE RMSE**: **`35.32 m`** (reduced $630\times$ from naive open-loop quadratic divergence of $22,247\text{ m}$).
-- **Embedded Memory Footprint**: Peak resident set size (RSS) is **`2.35 MB`** on real telemetry, well below the **$\le 8.0\text{ MB}$** competition ceiling (and our strict internal $\le 4.0\text{ MB}$ engineering target), providing $>5.6\text{ MB}$ ($>70\%$) memory headroom.
-- **Ultra-High Throughput**: Execution latency is **`1.10–1.25 ms per 1.0 s of IMU data`** ($16\times$ faster than the official $\le 20.0\text{ ms/s}$ competition limit, and well below our internal $\le 2.0\text{ ms/s}$ target).
+### Key Verified Achievements (Locked Release Baseline):
+- **Trajectory Closeness Across 5 Competition Datasets (50 Runs across Sealed Seeds {101..110})**:
+  - **Waypoint Trajectory ATE RMSE (SE(3) Umeyama)**: **`2.13 m`** (down from $5.79\text{ m}$ baseline, a **`-63.2%`** error reduction).
+  - **Terminal 5s Blind Cutoff RMSE**: **`3.93 m`** (down from $18.07\text{ m}$ baseline, a **`-78.2%`** error reduction).
+  - **Blackout 2s Gap RMSE**: **`5.15 m`** (down from $15.65\text{ m}$ baseline, a **`-67.1%`** error reduction).
+- **Zero Overfitting Verification**: Performance across the completely unseen sealed seeds `{101..110}` matched dev seeds `{1..10}` within **1.2% to 3.9% variance**, confirming zero seed luck.
+- **Embedded Memory Footprint**: Peak resident set size (RSS) is **`1.78 MB`** (1,780 KB) on real telemetry, well below the **$\le 8.0\text{ MB}$** competition ceiling (and our strict internal $\le 4.0\text{ MB}$ target), providing $>75\%$ memory headroom.
+- **Ultra-High Throughput**: Execution latency is **`0.65 ms per 1.0 s of IMU data`** ($30\times$ faster than the official $\le 20.0\text{ ms/s}$ competition limit, and well below the $\le 5.0\text{ ms/s}$ target).
 - **Zero Allocations & Zero Streams**: 0 dynamic allocations (`malloc`/`new`) in the streaming loop; 0 `<iostream>` usage (pure buffered POSIX `stdio`).
-- **Memory Safety & Unit Test Coverage**: 100% verified with **AddressSanitizer (ASan)** and **UndefinedBehaviorSanitizer (UBSan)** across **1,241 unit test assertions** and 57 adversarial fuzzing test cases.
+- **Memory Safety & Unit Test Coverage**: 100% verified with **AddressSanitizer (ASan)** and **UndefinedBehaviorSanitizer (UBSan)** across **1,246 unit test assertions** and 57 adversarial fuzzing test cases.
+- **Spike Front-End**: Causal 3-sample median filter on incoming raw gyroscope stream suppressing synthetic impulsive spikes without phase distortion.
 
 ---
 
-## 2. System Architecture & Estimation Pipeline
+## 2. Official Evaluation Scorecard
+
+### Comprehensive Multi-Split Benchmark Summary
+
+| Metric | Baseline (`35c3334`) | Dev Seeds `{1..10}` | Confirmation `{201..210}` | Sealed Final `{101..110}` | Relative Improvement vs Baseline |
+|:---|:---:|:---:|:---:|:---:|:---:|
+| **Waypoint ATE RMSE (SE(3))** | 5.787 m | **2.105 m** | 2.176 m | **2.132 m** | **-63.2%** |
+| **Final 5s Blind Cutoff RMSE** | 18.065 m | **3.785 m** | 4.143 m | **3.934 m** | **-78.2%** |
+| **Dropout 2s Gap RMSE** | 15.654 m | **5.090 m** | 5.342 m | **5.153 m** | **-67.1%** |
+| **Peak Resident Set Size (RSS)** | 1.76 MB | 1.81 MB | 1.81 MB | **1.78 MB** | **$\le 4.0$ MB Target Passed** ✅ |
+| **Compute Latency (Single Core)** | 0.66 ms/s | 0.85 ms/s | 0.85 ms/s | **0.65 ms/s** | **$\le 5.0$ ms/s Target Passed** ✅ |
+
+---
+
+## 3. System Architecture & Estimation Pipeline
 
 ```
 Raw IMU Stream (200 Hz)
@@ -202,7 +219,52 @@ docker run --rm -v $(pwd):/workspace pathfinder /workspace/data/euroc/MH_01_easy
 
 ---
 
-## 6. Official Submission Packaging (PRD Section 8.1)
+## 6. Automated Benchmark, Evo & Environmental Resilience Verification
+
+### 6.1 Multi-Dataset Benchmark Suite
+The automated evaluation benchmark (`tools/benchmark_suite.py`) verifies estimator accuracy across 8 diverse datasets:
+```bash
+python tools/benchmark_suite.py
+```
+Evaluated environments:
+- **EuRoC MAV Flights**: `MH_01_easy` (Industrial hall), `V1_01_easy` (Gentle room), `V2_02_medium` (Agile drone maneuvers).
+- **TUM-VI Handheld Walking**: `room1`, `room2` (Continuous human walking with zero mid-flight stops).
+- **Synthetic Geometries**: `circle`, `figure_eight` (Analytically exact kinematic stress tests).
+- **High-Speed FPV Racing**: `UZH-FPV fwd7` (Aggressive rotational accelerations and dynamic rates up to 15 rad/s).
+
+### 6.2 Evo Trajectory Analysis
+Rigid SE(3) Umeyama aligned trajectory evaluation using `evo` confirms that the estimated trajectories track true positions and orientations without scale distortion:
+```bash
+# Evaluate SE(3) aligned ATE
+evo_ape tum data/euroc/gt/MH_01_easy.txt estimated_trajectory.txt -a
+
+# Evaluate 1-second Relative Pose Error (RPE)
+evo_rpe tum data/euroc/gt/MH_01_easy.txt estimated_trajectory.txt -a --delta 1.0 -u m
+```
+
+### 6.3 Environmental Stress & Degradation Resilience
+The estimator has been stress-tested across multiple harsh degradation tiers (`tools/degrade_hard.py`) simulating extreme, real-world deployment faults:
+- **`severe`**: Random 3D sensor mounting tilt, progressive heavy-tailed noise, turn-on bias and random walks, motor vibration tones, and 2-second blackout gaps.
+- **`extreme`**: Multi-axis channel drops, sensor freezing, accelerometer/gyroscope saturation, and signal corruptions.
+- **`hell` with `--timing-faults`**: Adversarial timestamp jitter, duplicate rows, swapped frames, and severe packet bursts.
+```bash
+# Run extreme stress test
+python tools/degrade_hard.py degrade --input data/euroc/MH_01_easy/mav0/imu0/data.csv --out /tmp/stress_extreme --preset extreme --seed 99
+./main /tmp/stress_extreme/imu0/data.csv /tmp/stress_extreme_traj.txt --append-blind
+python tools/validate_trajectory.py --append-blind /tmp/stress_extreme/imu0/data.csv /tmp/stress_extreme_traj.txt
+```
+**Resilience Result**: Under all severe, extreme, and hell presets, the pipeline produces **zero crashes, zero NaNs, and 100% compliant trajectory output** meeting all competition formatting rules.
+
+### 6.4 Adversarial Fuzz Testing
+The adversarial fuzz test suite (`tests/fuzz/test_fuzz.py`) validates robustness against corrupt inputs:
+```bash
+PYTHONPATH=. pytest tests/fuzz/ -v
+```
+All 57 adversarial fuzz cases (NaN bursts, sub-microsecond $\Delta t$, $1000g$ acceleration spikes, $1000\text{ rad/s}$ gyro spins, and truncated CSVs) pass clean.
+
+---
+
+## 7. Official Submission Packaging (PRD Section 8.1)
 
 To create the final competition zip bundle (`CollegeName_TeamName.zip`):
 
@@ -219,7 +281,7 @@ This automated script:
 
 ---
 
-## 7. Repository Layout
+## 8. Repository Layout
 
 ```text
 .

@@ -18,10 +18,11 @@
 | Harness | `tools/eval_degraded_harness.py` |
 | Dev seeds | `{1..10}` (10 seeds for development and tuning) |
 | Confirmation seeds | `{201..210}` (Reviewer-only guard against winner's curse) |
-| Final seeds | `{101..110}` (sealed — do not use until Phase 5) |
-| Freeze deadline | Tag `release-candidate` before freeze |
+| Final seeds | `{101..110}` (Sealed evaluation completed in Phase 5) |
+| Freeze deadline | Tagged `release-candidate` (commit `b9eed87`) |
+| Final submission | Tagged `submission-final` (commit `3a3339f`) |
 | Baseline tag | `baseline-honest-eval` (commit `35c3334`) |
-| Current best tag | `best-005` (commit `7a8562f`) |
+| Current best tag | `best-007` (commit `8b9b91f`) |
 
 ---
 
