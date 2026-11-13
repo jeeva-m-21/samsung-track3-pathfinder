@@ -147,8 +147,8 @@ Mat15 build_q_matrix(double dt,
 
     double sigma_g = params::sigma_g_base * noise_mult_gyro * kappa;
     double sigma_a = params::sigma_a_base * noise_mult_acc * kappa;
-    double sigma_bg = params::sigma_bg_base * walk_mult_bg * kappa;
-    double sigma_ba = params::sigma_ba_base * walk_mult_ba * kappa;
+    double sigma_bg = params::sigma_bg_base * walk_mult_bg;
+    double sigma_ba = params::sigma_ba_base * walk_mult_ba;
 
     double q_theta = (sigma_g * sigma_g) * dt;
     double q_v = (sigma_a * sigma_a) * dt;

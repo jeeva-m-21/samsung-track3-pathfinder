@@ -96,7 +96,8 @@ def test_unnormalized_quaternion(synthetic_sample, tmp_path):
         if idx == 5:
             parts = line.split()
             # Double quaternion components
-            parts[4] = f"{float(parts[4])*2.0:.9f}"
+            for q_idx in range(4, 8):
+                parts[q_idx] = f"{float(parts[q_idx])*2.0:.9f}"
             bad_lines.append(" ".join(parts))
         else:
             bad_lines.append(line)

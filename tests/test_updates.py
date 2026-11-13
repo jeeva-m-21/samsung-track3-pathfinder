@@ -105,10 +105,11 @@ def test_tilt_gating_acc_excessive(default_params):
 
 
 def test_tilt_gating_omega_excessive(default_params):
-    """Tilt gating rejects sample when omega exceeds omega_max (1.0 rad/s)."""
+    """Tilt gating rejects sample when omega exceeds omega_max."""
     g_mag = 9.80665
     acc = np.array([0.0, 0.0, g_mag], dtype=np.float64)
-    omega = np.array([0.8, 0.8, 0.0], dtype=np.float64)  # norm = 1.13 > 1.0
+    omega_max = float(default_params.get("tilt_omega_max", 1.0))
+    omega = np.array([omega_max + 0.5, 0.0, 0.0], dtype=np.float64)
 
     passed = tilt_gating(acc, omega, g_mag=g_mag, quality=1.0, params=default_params)
     assert passed is False

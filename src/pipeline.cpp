@@ -1,11 +1,92 @@
 #include "pipeline.h"
 #include <algorithm>
 #include <cmath>
+#include <cinttypes>
 #include <cstdio>
 #include <cstring>
 #include <strings.h>
+#include <vector>
 
 namespace {
+
+#ifdef ENABLE_ORACLES
+struct GtPose {
+    int64_t t_ns;
+    Vec3 p;
+    Quat q;
+};
+
+struct GtTrajectory {
+    std::vector<GtPose> poses;
+    bool loaded = false;
+
+    bool load(const char* path) {
+        if (!path) return false;
+        FILE* fp = std::fopen(path, "r");
+        if (!fp) return false;
+        char line[512];
+        poses.reserve(40000);
+        while (std::fgets(line, sizeof(line), fp)) {
+            if (line[0] == '#' || line[0] == '\n') continue;
+            double t_sec, tx, ty, tz, qx, qy, qz, qw;
+            if (std::sscanf(line, "%lf %lf %lf %lf %lf %lf %lf %lf",
+                            &t_sec, &tx, &ty, &tz, &qx, &qy, &qz, &qw) == 8) {
+                GtPose pose;
+                pose.t_ns = static_cast<int64_t>(std::llround(t_sec * 1e9));
+                pose.p = math::make_vec3(tx, ty, tz);
+                pose.q = math::normalize(math::Quat{qw, qx, qy, qz});
+                poses.push_back(pose);
+            }
+        }
+        std::fclose(fp);
+        loaded = !poses.empty();
+        return loaded;
+    }
+
+    bool get_pose(int64_t t_ns, Vec3& p_out, Quat& q_out) const {
+        if (poses.empty()) return false;
+        if (t_ns <= poses.front().t_ns) {
+            p_out = poses.front().p;
+            q_out = poses.front().q;
+            return true;
+        }
+        if (t_ns >= poses.back().t_ns) {
+            p_out = poses.back().p;
+            q_out = poses.back().q;
+            return true;
+        }
+        auto it = std::lower_bound(poses.begin(), poses.end(), t_ns,
+            [](const GtPose& a, int64_t t) { return a.t_ns < t; });
+        if (it == poses.end()) {
+            p_out = poses.back().p;
+            q_out = poses.back().q;
+            return true;
+        }
+        if (it == poses.begin()) {
+            p_out = poses.front().p;
+            q_out = poses.front().q;
+            return true;
+        }
+        auto prev = it - 1;
+        double dt_total = static_cast<double>(it->t_ns - prev->t_ns);
+        double alpha = (dt_total > 0.0) ? static_cast<double>(t_ns - prev->t_ns) / dt_total : 0.0;
+        p_out = prev->p * (1.0 - alpha) + it->p * alpha;
+        q_out = it->q;
+        return true;
+    }
+
+    bool get_velocity(int64_t t_ns, Vec3& v_out) const {
+        if (poses.size() < 2) return false;
+        int64_t dt_ns = 50000000; // 50ms window
+        Vec3 p1, p2;
+        Quat q_dummy;
+        get_pose(t_ns - dt_ns / 2, p1, q_dummy);
+        get_pose(t_ns + dt_ns / 2, p2, q_dummy);
+        v_out = (p2 - p1) * (1e9 / static_cast<double>(dt_ns));
+        return true;
+    }
+};
+#endif // ENABLE_ORACLES
 
 struct BufferedSample {
     int64_t t_ns;
@@ -482,21 +563,42 @@ AblationMode parse_ablation_mode(const char* str) {
     return AblationMode::ESKF_FULL;
 }
 
+int run_eskf_full(const char* input_path,
+                  const char* output_path,
+                  const PipelineOptions& options);
+
+int run_pipeline_with_options(const char* input_path,
+                              const char* output_path,
+                              const PipelineOptions& options) {
+    switch (options.mode) {
+        case AblationMode::NAIVE:
+            return run_naive(input_path, output_path, options.append_blind);
+        case AblationMode::MAHONY:
+            return run_mahony(input_path, output_path, options.append_blind);
+        case AblationMode::ESKF_BASIC:
+            return run_eskf_basic(input_path, output_path, options.append_blind);
+        case AblationMode::ESKF_FULL:
+        default:
+            return run_eskf_full(input_path, output_path, options);
+    }
+}
+
 int run_pipeline(const char* input_path,
                  const char* output_path,
                  AblationMode mode,
                  bool append_blind) {
-    switch (mode) {
-        case AblationMode::NAIVE:
-            return run_naive(input_path, output_path, append_blind);
-        case AblationMode::MAHONY:
-            return run_mahony(input_path, output_path, append_blind);
-        case AblationMode::ESKF_BASIC:
-            return run_eskf_basic(input_path, output_path, append_blind);
-        case AblationMode::ESKF_FULL:
-        default:
-            return run_eskf_full(input_path, output_path, append_blind);
-    }
+    PipelineOptions options;
+    options.mode = mode;
+    options.append_blind = append_blind;
+    return run_pipeline_with_options(input_path, output_path, options);
+}
+
+int run_eskf_full(const char* input_path,
+                  const char* output_path,
+                  bool append_blind) {
+    PipelineOptions options;
+    options.append_blind = append_blind;
+    return run_eskf_full(input_path, output_path, options);
 }
 
 // ---------------------------------------------------------------------------
@@ -1099,7 +1201,8 @@ int run_eskf_basic(const char* input_path,
 // ---------------------------------------------------------------------------
 int run_eskf_full(const char* input_path,
                   const char* output_path,
-                  bool append_blind) {
+                  const PipelineOptions& options) {
+    bool append_blind = options.append_blind;
     io::IMUReader reader;
     if (!reader.open(input_path)) {
         std::fprintf(stderr, "Error: failed to open input '%s'\n", input_path);
@@ -1112,6 +1215,23 @@ int run_eskf_full(const char* input_path,
         reader.close();
         return 1;
     }
+
+#ifdef ENABLE_ORACLES
+    FILE* tel_fp = nullptr;
+    if (options.telemetry_path) {
+        tel_fp = std::fopen(options.telemetry_path, "w");
+        if (tel_fp) {
+            std::fprintf(tel_fp, "t_ns,t_sec,px,py,pz,vx,vy,vz,qx,qy,qz,qw,bax,bay,baz,bgx,bgy,bgz,is_stat,tilt_applied,vel_bounded,kappa,quality\n");
+        }
+    }
+
+    GtTrajectory gt_traj;
+    if (options.oracle_gt_path) {
+        gt_traj.load(options.oracle_gt_path);
+    }
+    Mat3 R_gt_to_est = Mat3::identity();
+    bool gt_init_done = false;
+#endif
 
     Initializer initializer;
     GapHandler gap_handler;
@@ -1185,8 +1305,13 @@ int run_eskf_full(const char* input_path,
         double dt = static_cast<double>(t_curr - prev_t_ns) * 1e-9;
         prev_t_ns = t_curr;
 
-        state = strapdown_step_midpoint(state, omega_curr, acc_curr, dt, g_w, params::tau_ou);
-        Mat15 F = build_f_matrix(state, omega_curr, acc_curr, dt, params::tau_ou);
+#ifdef ENABLE_ORACLES
+        double cur_tau_ou = options.disable_tau_ou ? 0.0 : params::tau_ou;
+#else
+        double cur_tau_ou = params::tau_ou;
+#endif
+        state = strapdown_step_midpoint(state, omega_curr, acc_curr, dt, g_w, cur_tau_ou);
+        Mat15 F = build_f_matrix(state, omega_curr, acc_curr, dt, cur_tau_ou);
         Mat15 Q = build_q_matrix(dt, q_gyro_mult, q_acc_mult,
                                  params::walk_mult_bg, params::walk_mult_ba, monitor.kappa());
         P = propagate_covariance(P, F, Q);
@@ -1199,15 +1324,97 @@ int run_eskf_full(const char* input_path,
         Vec3 omega_stat_mean = stat_buf.get_mean_gyro(params::zupt_window_s);
         monitor.step(t_sec, omega_curr, acc_curr, is_stat, is_stat ? &omega_stat_mean : nullptr);
 
+        bool tilt_applied = false;
+        bool vel_bounded = false;
         if (step_res.apply_updates) {
-            apply_tilt_update(state, P, acc_filt, omega_curr, monitor.quality(), g_w, 1e9, step_res.r_scale);
+#ifdef ENABLE_ORACLES
+            if (!options.disable_tilt) {
+                tilt_applied = apply_tilt_update(state, P, acc_filt, omega_curr, monitor.quality(), g_w, 1e9, step_res.r_scale);
+            }
+            if (is_stat && !options.disable_zupt) {
+                apply_zupt_update(state, P, 1e9, step_res.r_scale);
+            } else if (params::enable_rotor_drag) {
+                apply_rotor_drag_update(state, P, acc_curr, omega_curr, g_w, params::rotor_drag_kd, params::rotor_drag_sigma, params::rotor_drag_gate);
+            }
+            if (!options.disable_vel_bound) {
+                vel_bounded = apply_velocity_bounding(state, P);
+            }
+#else
+            tilt_applied = apply_tilt_update(state, P, acc_filt, omega_curr, monitor.quality(), g_w, 1e9, step_res.r_scale);
             if (is_stat) {
                 apply_zupt_update(state, P, 1e9, step_res.r_scale);
             } else if (params::enable_rotor_drag) {
                 apply_rotor_drag_update(state, P, acc_curr, omega_curr, g_w, params::rotor_drag_kd, params::rotor_drag_sigma, params::rotor_drag_gate);
             }
-            apply_velocity_bounding(state, P);
+            vel_bounded = apply_velocity_bounding(state, P);
+#endif
         }
+
+#ifdef ENABLE_ORACLES
+        if (options.oracle_att && gt_traj.loaded) {
+            Vec3 p_gt;
+            Quat q_gt;
+            if (gt_traj.get_pose(t_curr, p_gt, q_gt)) {
+                Mat3 R_gt_w = R_gt_to_est * q_gt.to_rot_mat();
+                Quat q_new = math::from_rot_mat(R_gt_w);
+                math::ensure_continuity(q_new, state.q);
+                state.q = q_new;
+            }
+        } else if (options.oracle_yaw && gt_traj.loaded) {
+            Vec3 p_gt;
+            Quat q_gt;
+            if (gt_traj.get_pose(t_curr, p_gt, q_gt)) {
+                Mat3 R_gt_w = R_gt_to_est * q_gt.to_rot_mat();
+                double psi_gt = std::atan2(R_gt_w.data[3], R_gt_w.data[0]);
+
+                Mat3 R_est = state.q.to_rot_mat();
+                double r20 = R_est.data[6];
+                if (r20 < -1.0) r20 = -1.0;
+                if (r20 > 1.0) r20 = 1.0;
+                double theta_est = -std::asin(r20);
+                double phi_est = std::atan2(R_est.data[7], R_est.data[8]);
+
+                double c_psi = std::cos(psi_gt), s_psi = std::sin(psi_gt);
+                double c_th = std::cos(theta_est), s_th = std::sin(theta_est);
+                double c_ph = std::cos(phi_est), s_ph = std::sin(phi_est);
+
+                Mat3 R_new;
+                R_new.data[0] = c_psi * c_th;
+                R_new.data[1] = c_psi * s_th * s_ph - s_psi * c_ph;
+                R_new.data[2] = c_psi * s_th * c_ph + s_psi * s_ph;
+
+                R_new.data[3] = s_psi * c_th;
+                R_new.data[4] = s_psi * s_th * s_ph + c_psi * c_ph;
+                R_new.data[5] = s_psi * s_th * c_ph - c_psi * s_ph;
+
+                R_new.data[6] = -s_th;
+                R_new.data[7] = c_th * s_ph;
+                R_new.data[8] = c_th * c_ph;
+
+                Quat q_new = math::from_rot_mat(R_new);
+                math::ensure_continuity(q_new, state.q);
+                state.q = q_new;
+            }
+        }
+
+        if (tel_fp) {
+            std::fprintf(tel_fp, "%" PRId64 ",%.4f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%d,%d,%d,%.4f,%.4f\n",
+                         t_curr, t_sec,
+                         state.p.data[0], state.p.data[1], state.p.data[2],
+                         state.v.data[0], state.v.data[1], state.v.data[2],
+                         state.q.x, state.q.y, state.q.z, state.q.w,
+                         state.b_a.data[0], state.b_a.data[1], state.b_a.data[2],
+                         state.b_g.data[0], state.b_g.data[1], state.b_g.data[2],
+                         is_stat ? 1 : 0,
+                         tilt_applied ? 1 : 0,
+                         vel_bounded ? 1 : 0,
+                         monitor.kappa(),
+                         monitor.quality());
+        }
+#else
+        (void)tilt_applied;
+        (void)vel_bounded;
+#endif
 
         if (was_in_gap) {
             delay_buf.apply_bridge(state.p);
@@ -1241,6 +1448,31 @@ int run_eskf_full(const char* input_path,
                 g_mag = initializer.g_mag();
                 t0_ns = s_init_buf[0].t_ns;
                 tilt_filter.reset(initializer.a_mean());
+
+#ifdef ENABLE_ORACLES
+                if (gt_traj.loaded && !gt_init_done) {
+                    Vec3 p_gt0;
+                    Quat q_gt0;
+                    if (gt_traj.get_pose(t0_ns, p_gt0, q_gt0)) {
+                        R_gt_to_est = state.q.to_rot_mat() * q_gt0.to_rot_mat().transpose();
+                        gt_init_done = true;
+                        if (options.oracle_v0) {
+                            Vec3 v_gt0;
+                            if (gt_traj.get_velocity(t0_ns, v_gt0)) {
+                                state.v = R_gt_to_est * v_gt0;
+                            }
+                        }
+                    }
+                }
+                if (options.oracle_bias) {
+                    Vec3 g_body = state.q.to_rot_mat().transpose() * g_w;
+                    state.b_a = initializer.a_mean() + g_body;
+                    for (size_t i = 0; i < 3; ++i) {
+                        P(9 + i, 9 + i) = 1e-12;
+                        P(12 + i, 12 + i) = 1e-12;
+                    }
+                }
+#endif
 
                 double sigma_w_init = initializer.gyro_noise_std();
                 double sigma_a_init = initializer.acc_noise_std();
@@ -1426,6 +1658,12 @@ int run_eskf_full(const char* input_path,
                               q_extrap.x, q_extrap.y, q_extrap.z, q_extrap.w);
         }
     }
+
+#ifdef ENABLE_ORACLES
+    if (tel_fp) {
+        std::fclose(tel_fp);
+    }
+#endif
 
     writer.close();
     reader.close();

@@ -169,6 +169,7 @@ def generate_trajectory(
     t0_ns: int = 1403636579000000000,
     yaw_rate: float = 0.5,
     seed: int = 42,
+    noise: bool = False,
 ) -> Dict[str, np.ndarray]:
     """Generate exact analytic trajectory with ideal IMU measurements.
 
@@ -210,89 +211,114 @@ def generate_trajectory(
         omega = np.tile(np.array([0.0, 0.0, yaw_rate]), (n_samples, 1))
 
     elif traj_type == "circle":
-        # Banked circular trajectory:
+        # Banked circular trajectory starting from stationary rest (SPEC §12.3 & §12.7)
         # Radius R, angular frequency omega_0
         R = 5.0
         v_speed = 2.0
         w0 = v_speed / R
+        t_rest = 1.5
+        t_ramp = 2.5
+
+        theta = np.zeros(n_samples)
+        dtheta = np.zeros(n_samples)
+        d2theta = np.zeros(n_samples)
+
+        for i in range(n_samples):
+            ti = t[i]
+            if ti <= t_rest:
+                pass
+            elif ti <= t_rest + t_ramp:
+                tau = (ti - t_rest) / t_ramp
+                s = 6.0 * tau**5 - 15.0 * tau**4 + 10.0 * tau**3
+                s_dot = 30.0 * tau**4 - 60.0 * tau**3 + 30.0 * tau**2
+                s_int = (tau**6 - 3.0 * tau**5 + 2.5 * tau**4) * t_ramp
+                theta[i] = w0 * s_int
+                dtheta[i] = w0 * s
+                d2theta[i] = (w0 / t_ramp) * s_dot
+            else:
+                s_int_full = 0.5 * t_ramp
+                theta[i] = w0 * s_int_full + w0 * (ti - t_rest - t_ramp)
+                dtheta[i] = w0
+                d2theta[i] = 0.0
 
         # Position, velocity, acceleration in world frame
-        px = R * np.cos(w0 * t)
-        py = R * np.sin(w0 * t)
+        px = R * np.sin(theta)
+        py = R * (1.0 - np.cos(theta))
         pz = np.zeros_like(t)
         p = np.stack([px, py, pz], axis=-1)
 
-        vx = -R * w0 * np.sin(w0 * t)
-        vy = R * w0 * np.cos(w0 * t)
+        vx = R * np.cos(theta) * dtheta
+        vy = R * np.sin(theta) * dtheta
         vz = np.zeros_like(t)
         v = np.stack([vx, vy, vz], axis=-1)
 
-        ax = -R * (w0**2) * np.cos(w0 * t)
-        ay = -R * (w0**2) * np.sin(w0 * t)
+        ax = -R * np.sin(theta) * (dtheta**2) + R * np.cos(theta) * d2theta
+        ay = R * np.cos(theta) * (dtheta**2) + R * np.sin(theta) * d2theta
         az = np.zeros_like(t)
         p_ddot = np.stack([ax, ay, az], axis=-1)
 
-        # In a coordinated turn:
-        # Apparent acceleration (specific force in world): f_w = p_ddot - g_w
-        # f_w = [ax, ay, g_mag]
-        fw = p_ddot - g_w
-        fw_norm = np.linalg.norm(fw, axis=1, keepdims=True)
+        # Dynamic bank angle and heading
+        yaw = theta
+        dyaw = dtheta
+        roll = 0.06 * np.sin(theta)
+        droll = 0.06 * np.cos(theta) * dtheta
+        pitch = 0.04 * (1.0 - np.cos(theta))
+        dpitch = 0.04 * np.sin(theta) * dtheta
 
-        # Body frame definition:
-        # Forward x_b = v / |v| (tangent)
-        # Down z_b = fw / |fw| (direction of apparent gravity)
-        # Right y_b = z_b x x_b
-        # Note: v . fw = vx*ax + vy*ay + 0 = 0, so x_b and z_b are strictly orthogonal!
-        xb = v / np.linalg.norm(v, axis=1, keepdims=True)
-        zb = fw / fw_norm
-        yb = np.cross(zb, xb)
-
-        # Build rotation matrix R = [xb, yb, zb]
-        R_mat = np.stack([xb, yb, zb], axis=-1)
-        q = rot_matrix_to_quat(R_mat)
-
-        # Time derivative of R_mat:
-        # dot(xb) = ax / v_speed
-        dot_xb = p_ddot / v_speed
-        # dot(fw) = [-R*w0^3*(-sin), -R*w0^3*(cos), 0]
-        dot_fw = np.stack([R * (w0**3) * np.sin(w0 * t), -R * (w0**3) * np.cos(w0 * t), np.zeros_like(t)], axis=-1)
-        dot_zb = dot_fw / fw_norm  # fw_norm is constant!
-        dot_yb = np.cross(dot_zb, xb) + np.cross(zb, dot_xb)
-
-        dot_R = np.stack([dot_xb, dot_yb, dot_zb], axis=-1)
-        # Omega skew = R^T @ dot_R
-        # omega_b = [Omega_21, Omega_02, Omega_10]
-        Omega = np.matmul(np.swapaxes(R_mat, -1, -2), dot_R)
-        omega = np.stack([Omega[:, 2, 1], Omega[:, 0, 2], Omega[:, 1, 0]], axis=-1)
+        q, omega = euler_zyx_to_quat_and_omega(roll, pitch, yaw, droll, dpitch, dyaw)
 
     elif traj_type == "figure_eight":
+        # 3D Figure-8 trajectory starting from stationary rest
         A = 5.0
-        w0 = 0.2
+        w0 = 0.25
         B = 1.0
-        wz = 0.4
+        t_rest = 1.5
+        t_ramp = 2.5
 
-        px = A * np.sin(w0 * t)
-        py = 0.5 * A * np.sin(2.0 * w0 * t)
-        pz = B * np.sin(wz * t)
+        theta = np.zeros(n_samples)
+        dtheta = np.zeros(n_samples)
+        d2theta = np.zeros(n_samples)
+
+        for i in range(n_samples):
+            ti = t[i]
+            if ti <= t_rest:
+                pass
+            elif ti <= t_rest + t_ramp:
+                tau = (ti - t_rest) / t_ramp
+                s = 6.0 * tau**5 - 15.0 * tau**4 + 10.0 * tau**3
+                s_dot = 30.0 * tau**4 - 60.0 * tau**3 + 30.0 * tau**2
+                s_int = (tau**6 - 3.0 * tau**5 + 2.5 * tau**4) * t_ramp
+                theta[i] = w0 * s_int
+                dtheta[i] = w0 * s
+                d2theta[i] = (w0 / t_ramp) * s_dot
+            else:
+                s_int_full = 0.5 * t_ramp
+                theta[i] = w0 * s_int_full + w0 * (ti - t_rest - t_ramp)
+                dtheta[i] = w0
+                d2theta[i] = 0.0
+
+        px = A * np.sin(theta)
+        py = 0.5 * A * np.sin(2.0 * theta)
+        pz = B * np.sin(2.0 * theta)
         p = np.stack([px, py, pz], axis=-1)
 
-        vx = A * w0 * np.cos(w0 * t)
-        vy = A * w0 * np.cos(2.0 * w0 * t)
-        vz = B * wz * np.cos(wz * t)
+        vx = A * np.cos(theta) * dtheta
+        vy = A * np.cos(2.0 * theta) * dtheta
+        vz = 2.0 * B * np.cos(2.0 * theta) * dtheta
         v = np.stack([vx, vy, vz], axis=-1)
 
-        ax = -A * (w0**2) * np.sin(w0 * t)
-        ay = -2.0 * A * (w0**2) * np.sin(2.0 * w0 * t)
-        az = -B * (wz**2) * np.sin(wz * t)
+        ax = -A * np.sin(theta) * (dtheta**2) + A * np.cos(theta) * d2theta
+        ay = -2.0 * A * np.sin(2.0 * theta) * (dtheta**2) + A * np.cos(2.0 * theta) * d2theta
+        az = -4.0 * B * np.sin(2.0 * theta) * (dtheta**2) + 2.0 * B * np.cos(2.0 * theta) * d2theta
         p_ddot = np.stack([ax, ay, az], axis=-1)
 
         # Smooth orientation from trajectory angles
-        yaw = 0.5 * np.sin(w0 * t)
-        dyaw = 0.5 * w0 * np.cos(w0 * t)
-        pitch = 0.2 * np.sin(wz * t)
-        dpitch = 0.2 * wz * np.cos(wz * t)
-        roll = 0.15 * np.sin(2.0 * w0 * t)
-        droll = 0.3 * w0 * np.cos(2.0 * w0 * t)
+        yaw = 0.5 * np.sin(theta)
+        dyaw = 0.5 * np.cos(theta) * dtheta
+        pitch = 0.2 * np.sin(2.0 * theta)
+        dpitch = 0.4 * np.cos(2.0 * theta) * dtheta
+        roll = 0.15 * np.sin(2.0 * theta)
+        droll = 0.3 * np.cos(2.0 * theta) * dtheta
 
         q, omega = euler_zyx_to_quat_and_omega(roll, pitch, yaw, droll, dpitch, dyaw)
 
@@ -355,6 +381,13 @@ def generate_trajectory(
     R_wb = np.swapaxes(R_bw, -1, -2)  # world to body
     f_w = p_ddot - g_w
     acc = np.matmul(R_wb, f_w[..., np.newaxis]).squeeze(-1)
+
+    # Physical sensor noise floor: real MEMS sensors have thermal ADC jitter.
+    # Without jitter, exact bitwise identical floating point values trigger stuck sensor detection (SPEC §12.7).
+    if noise:
+        sensor_rng = np.random.RandomState(seed if seed is not None else 42)
+        acc = acc + sensor_rng.normal(0.0, 1e-3, size=acc.shape)
+        omega = omega + sensor_rng.normal(0.0, 1e-4, size=omega.shape)
 
     return {
         "t_ns": t_ns,
@@ -466,6 +499,7 @@ def main() -> None:
     parser.add_argument("--g-mag", type=float, default=9.80665, help="Gravity magnitude in m/s^2")
     parser.add_argument("--yaw-rate", type=float, default=0.5, help="Yaw rate for constant_yaw (rad/s)")
     parser.add_argument("--seed", type=int, default=42, help="RNG seed for random smooth trajectory")
+    parser.add_argument("--noise", action="store_true", help="Add synthetic sensor jitter")
     parser.add_argument("--output-imu", type=str, default=None, help="Output path for EuRoC imu0/data.csv")
     parser.add_argument("--output-gt", type=str, default=None, help="Output path for groundtruth.txt (TUM format)")
 
@@ -478,6 +512,7 @@ def main() -> None:
         g_mag=args.g_mag,
         yaw_rate=args.yaw_rate,
         seed=args.seed,
+        noise=args.noise,
     )
 
     if args.output_imu:

@@ -170,23 +170,40 @@ def compute_trajectory_metrics(
     except Exception:
         rpe_trans_1s = 0.0
 
-    # 5. Start-anchored trajectory error
-    t_ns_ref, p_ref, q_ref = load_tum_trajectory(ref_p)
-    t_ns_est, p_est, q_est = load_tum_trajectory(est_p)
+    # 5. Start-anchored trajectory error (anchored to first synchronized pose)
+    T_ref0 = t_ref_sync.poses_se3[0]
+    T_est0 = t_est_sync.poses_se3[0]
+    T_align0 = T_ref0 @ np.linalg.inv(T_est0)
 
-    # Associate indices
-    t_ref_s = (t_ns_ref - t_ns_ref[0]) * 1e-9
-    t_est_s = (t_ns_est - t_ns_ref[0]) * 1e-9
-
-    p_est_anchored, q_est_anchored = align_start_anchored(p_est, q_est, p_ref[0], q_ref[0])
-    # Compute error on synchronized prefix
-    min_len = min(len(p_ref), len(p_est_anchored))
-    pos_err_anchored = np.linalg.norm(p_est_anchored[:min_len] - p_ref[:min_len], axis=1)
+    p_ref_sync = np.array([T[:3, 3] for T in t_ref_sync.poses_se3])
+    p_est_sync = np.array([T[:3, 3] for T in t_est_sync.poses_se3])
+    
+    # Apply initial frame alignment to all estimated poses
+    p_est_anchored = np.array([(T_align0 @ T)[:3, 3] for T in t_est_sync.poses_se3])
+    pos_err_anchored = np.linalg.norm(p_est_anchored - p_ref_sync, axis=1)
     start_anchored_rmse = float(np.sqrt(np.mean(pos_err_anchored**2)))
 
+    # Trajectory dynamic spans
+    ref_span = float(np.linalg.norm(np.max(p_ref_sync, axis=0) - np.min(p_ref_sync, axis=0)))
+    est_span = float(np.linalg.norm(np.max(p_est_sync, axis=0) - np.min(p_est_sync, axis=0)))
+    span_ratio = float(est_span / max(ref_span, 1e-6))
+
     # 6. Rotation Error (geodesic distance in degrees)
-    rot_err_arr = geodesic_distance_deg(q_est_anchored[:min_len], q_ref[:min_len])
-    rot_err_deg = float(np.mean(rot_err_arr))
+    # Extract rotation matrices and compute geodesic angular error
+    R_ref0 = T_ref0[:3, :3]
+    R_est0 = T_est0[:3, :3]
+    R_align0 = R_ref0 @ R_est0.T
+    rot_errs = []
+    for k in range(len(t_ref_sync.poses_se3)):
+        R_ref_k = t_ref_sync.poses_se3[k][:3, :3]
+        R_est_k_anchored = R_align0 @ t_est_sync.poses_se3[k][:3, :3]
+        R_diff = R_ref_k.T @ R_est_k_anchored
+        tr = np.clip((np.trace(R_diff) - 1.0) / 2.0, -1.0, 1.0)
+        rot_errs.append(np.degrees(np.arccos(tr)))
+    rot_err_deg = float(np.mean(rot_errs)) if rot_errs else 0.0
+
+    t_ref_s = t_ref_sync.timestamps - t_ref_sync.timestamps[0]
+    min_len = len(p_ref_sync)
 
     # 7. Segment metrics from sidecar (if available)
     checkpoint_err = float(ate_rmse_aligned)
@@ -236,6 +253,9 @@ def compute_trajectory_metrics(
         "ate_rmse_unaligned": ate_rmse_unaligned,
         "rpe_trans_1s": rpe_trans_1s,
         "start_anchored_rmse": start_anchored_rmse,
+        "ref_span": ref_span,
+        "est_span": est_span,
+        "span_ratio": span_ratio,
         "checkpoint_err": checkpoint_err,
         "blind5_rmse": blind5_rmse,
         "blind5_final_err": blind5_final_err,

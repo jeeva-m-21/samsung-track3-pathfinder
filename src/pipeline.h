@@ -18,7 +18,28 @@ enum class AblationMode {
     ESKF_FULL
 };
 
+struct PipelineOptions {
+    AblationMode mode = AblationMode::ESKF_FULL;
+    bool append_blind = false;
+#ifdef ENABLE_ORACLES
+    const char* telemetry_path = nullptr;
+    const char* oracle_gt_path = nullptr;
+    bool oracle_att = false;
+    bool oracle_yaw = false;
+    bool oracle_bias = false;
+    bool oracle_v0 = false;
+    bool disable_tau_ou = false;
+    bool disable_zupt = false;
+    bool disable_tilt = false;
+    bool disable_vel_bound = false;
+#endif
+};
+
 AblationMode parse_ablation_mode(const char* str);
+
+int run_pipeline_with_options(const char* input_path,
+                              const char* output_path,
+                              const PipelineOptions& options);
 
 int run_pipeline(const char* input_path,
                  const char* output_path,

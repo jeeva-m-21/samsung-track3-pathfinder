@@ -12,10 +12,41 @@ int main(int argc, char* argv[]) {
     const char* output_path = nullptr;
     bool append_blind = false;
     const char* ablation_mode = "eskf_full"; // Default is full ESKF production pipeline
+    PipelineOptions options;
 
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--append-blind") == 0) {
             append_blind = true;
+#ifdef ENABLE_ORACLES
+        } else if (std::strcmp(argv[i], "--telemetry") == 0) {
+            if (i + 1 < argc) {
+                options.telemetry_path = argv[++i];
+            }
+        } else if (std::strcmp(argv[i], "--oracle-gt") == 0) {
+            if (i + 1 < argc) {
+                options.oracle_gt_path = argv[++i];
+            }
+        } else if (std::strcmp(argv[i], "--oracle-att") == 0) {
+            options.oracle_att = true;
+        } else if (std::strcmp(argv[i], "--oracle-yaw") == 0) {
+            options.oracle_yaw = true;
+        } else if (std::strcmp(argv[i], "--oracle-bias") == 0) {
+            options.oracle_bias = true;
+        } else if (std::strcmp(argv[i], "--oracle-v0") == 0) {
+            options.oracle_v0 = true;
+        } else if (std::strcmp(argv[i], "--oracle-all") == 0) {
+            options.oracle_yaw = true;
+            options.oracle_bias = true;
+            options.oracle_v0 = true;
+        } else if (std::strcmp(argv[i], "--disable-tau-ou") == 0) {
+            options.disable_tau_ou = true;
+        } else if (std::strcmp(argv[i], "--disable-zupt") == 0) {
+            options.disable_zupt = true;
+        } else if (std::strcmp(argv[i], "--disable-tilt") == 0) {
+            options.disable_tilt = true;
+        } else if (std::strcmp(argv[i], "--disable-vel-bound") == 0) {
+            options.disable_vel_bound = true;
+#endif
         } else if (std::strcmp(argv[i], "--input") == 0 || std::strcmp(argv[i], "-i") == 0) {
             if (i + 1 < argc) {
                 raw_input_path = argv[++i];
@@ -162,8 +193,9 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    AblationMode mode = parse_ablation_mode(ablation_mode);
-    int status = run_pipeline(resolved_input, output_path, mode, append_blind);
+    options.mode = parse_ablation_mode(ablation_mode);
+    options.append_blind = append_blind;
+    int status = run_pipeline_with_options(resolved_input, output_path, options);
 
     if (temp_extracted_file[0] != '\0') {
         std::remove(temp_extracted_file);

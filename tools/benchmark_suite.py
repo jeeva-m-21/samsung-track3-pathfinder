@@ -33,13 +33,24 @@ DATASETS = [
 ]
 
 def compute_null_baseline(gt_path: str) -> tuple:
-    """Computes GT spatial spread (Null ATE) and 1s RMS displacement (Null RPE)."""
+    """Computes like-with-like Null baselines:
+    1. Null Start ATE: RMS distance from initial pose p(0) under start-anchoring.
+    2. Null Aligned ATE: GT spatial spread around centroid under SE(3) Umeyama alignment.
+    3. Null RPE 1s: RMS 1-second displacement of vehicle.
+    """
     gt = pd.read_csv(gt_path, sep=' ', comment='#', header=None)
     p = gt.iloc[:, 1:4].values
     t = gt.iloc[:, 0].values
-    centroid = np.mean(p, axis=0)
-    spread = float(np.sqrt(np.mean(np.sum((p - centroid)**2, axis=1))))
     
+    # 1. Null Start ATE (static predictor fixed at starting point p0)
+    p0 = p[0]
+    null_start_ate = float(np.sqrt(np.mean(np.sum((p - p0)**2, axis=1))))
+    
+    # 2. Null Aligned ATE (static predictor globally shifted to centroid)
+    centroid = np.mean(p, axis=0)
+    null_aligned_ate = float(np.sqrt(np.mean(np.sum((p - centroid)**2, axis=1))))
+    
+    # 3. Null RPE 1s
     disp_1s = []
     idx2 = 0
     stride = max(1, len(t) // 2000)
@@ -52,7 +63,7 @@ def compute_null_baseline(gt_path: str) -> tuple:
         if idx2 < len(t) and abs(t[idx2] - t_target) < 0.05:
             disp_1s.append(np.linalg.norm(p[idx2] - p[idx1]))
     rms_disp = float(np.sqrt(np.mean(np.array(disp_1s)**2))) if disp_1s else 0.0
-    return spread, rms_disp
+    return null_start_ate, null_aligned_ate, rms_disp
 
 def run_suite(binary: str = None):
     if binary is None:
@@ -64,8 +75,8 @@ def run_suite(binary: str = None):
             subprocess.run(["make", "-C", "src"], check=True)
             binary = "./main"
     results = {}
-    print(f"| {'Sequence':<15} | {'Filter ATE':<11} | {'Null ATE':<10} | {'Filter RPE':<11} | {'Null RPE':<10} | {'Gate (ATE)':<10} | {'Gate (RPE)':<10} |")
-    print("|" + "-"*17 + "|" + "-"*13 + "|" + "-"*12 + "|" + "-"*13 + "|" + "-"*12 + "|" + "-"*12 + "|" + "-"*12 + "|")
+    print(f"| {'Sequence':<15} | {'Start ATE (m)':<15} | {'Aligned ATE (m)':<17} | {'RPE 1s (m)':<13} | {'Span (Est/Ref)':<16} | {'Gate (Official)':<15} |")
+    print("|" + "-"*17 + "|" + "-"*17 + "|" + "-"*19 + "|" + "-"*15 + "|" + "-"*18 + "|" + "-"*17 + "|")
     
     for name, imu, gt in DATASETS:
         if not os.path.exists(gt):
@@ -73,24 +84,44 @@ def run_suite(binary: str = None):
         out_file = f"/tmp/eval_{name}.txt"
         subprocess.run([binary, imu, out_file], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         m = compute_trajectory_metrics(gt, out_file)
-        null_ate, null_rpe = compute_null_baseline(gt)
+        null_start, null_aligned, null_rpe = compute_null_baseline(gt)
         
-        filter_ate = m["ate_rmse_aligned"]
+        start_ate = m["start_anchored_rmse"]
+        aligned_ate = m["ate_rmse_aligned"]
         filter_rpe = m["rpe_trans_1s"]
+        est_span = m["est_span"]
+        ref_span = m["ref_span"]
+        span_str = f"{est_span:.1f}m / {ref_span:.1f}m"
         
-        gate_ate = "PASS" if filter_ate <= null_ate else "FAIL"
-        gate_rpe = "PASS" if filter_rpe <= null_rpe else "FAIL"
+        start_str = f"{start_ate:.2f} / {null_start:.2f}"
+        aligned_str = f"{aligned_ate:.2f} / {null_aligned:.2f}"
+        rpe_str = f"{filter_rpe:.2f} / {null_rpe:.2f}"
+        
+        is_degenerate = (est_span < 0.2 * ref_span) or (est_span < 0.1)
+        if is_degenerate:
+            gate = "FAIL (DEGEN)"
+        elif aligned_ate <= null_aligned and filter_rpe <= null_rpe:
+            gate = "PASS"
+        elif aligned_ate <= null_aligned:
+            gate = "PASS (ATE)"
+        elif filter_rpe <= null_rpe:
+            gate = "PASS (RPE)"
+        else:
+            gate = "FAIL"
         
         results[name] = {
-            "ate": filter_ate,
-            "null_ate": null_ate,
+            "start_ate": start_ate,
+            "null_start": null_start,
+            "aligned_ate": aligned_ate,
+            "null_aligned": null_aligned,
             "rpe": filter_rpe,
             "null_rpe": null_rpe,
-            "gate_ate": gate_ate,
-            "gate_rpe": gate_rpe
+            "est_span": est_span,
+            "ref_span": ref_span,
+            "gate": gate
         }
         
-        print(f"| {name:<15} | {filter_ate:>11.4f} | {null_ate:>10.4f} | {filter_rpe:>11.4f} | {null_rpe:>10.4f} | {gate_ate:^10} | {gate_rpe:^10} |")
+        print(f"| {name:<15} | {start_str:>15} | {aligned_str:>17} | {rpe_str:>13} | {span_str:>16} | {gate:^15} |")
     
     return results
 
