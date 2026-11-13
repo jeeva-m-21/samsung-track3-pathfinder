@@ -1,7 +1,7 @@
 # SPLITS.md — Data Split Definition
 
 **Committed before any tuning. Do not modify.**
-**Commit:** (to be filled after commit)
+**Commit:** `cbab034`
 **Date:** 2026-11-13
 
 ---
