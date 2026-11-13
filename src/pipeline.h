@@ -21,6 +21,7 @@ enum class AblationMode {
 struct PipelineOptions {
     AblationMode mode = AblationMode::ESKF_FULL;
     bool append_blind = false;
+    bool disable_spike_filter = false;
 #ifdef ENABLE_ORACLES
     const char* telemetry_path = nullptr;
     const char* oracle_gt_path = nullptr;

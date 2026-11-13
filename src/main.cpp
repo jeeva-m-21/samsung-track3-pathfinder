@@ -17,6 +17,8 @@ int main(int argc, char* argv[]) {
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--append-blind") == 0) {
             append_blind = true;
+        } else if (std::strcmp(argv[i], "--disable-spike-filter") == 0) {
+            options.disable_spike_filter = true;
 #ifdef ENABLE_ORACLES
         } else if (std::strcmp(argv[i], "--telemetry") == 0) {
             if (i + 1 < argc) {

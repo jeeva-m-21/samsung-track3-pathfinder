@@ -77,5 +77,10 @@
   "rts_min_span": 1.5,
   "rts_sigma_a": 0.5,
   "rts_r_p": 0.001,
-  "zupt_omega_thresh": 0.02
+  "zupt_omega_thresh": 0.02,
+  "enable_spike_filter": true,
+  "spike_filter_acc": false,
+  "spike_filter_hampel": false,
+  "spike_thresh_gyro": 0.3,
+  "spike_thresh_acc": 4.0
 }

@@ -86,6 +86,11 @@ constexpr double rts_min_span = 1.5;
 constexpr double rts_sigma_a = 0.5;
 constexpr double rts_r_p = 0.001;
 constexpr double zupt_omega_thresh = 0.02;
+constexpr bool enable_spike_filter = true;
+constexpr bool spike_filter_acc = false;
+constexpr bool spike_filter_hampel = false;
+constexpr double spike_thresh_gyro = 0.3;
+constexpr double spike_thresh_acc = 4.0;
 
 } // namespace params
 
