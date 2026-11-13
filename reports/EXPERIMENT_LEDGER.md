@@ -528,4 +528,52 @@ Reason: Meets all 8 acceptance criteria. Large, statistically significant gains 
 
 ---
 
+## EXP-E13: [Tier 1] Blind Curvature Extrapolation (Body-Frame Velocity & Decaying Gyro Rotation)
+
+- **Date / commit:** 2026-11-13 / `2c30261` (parent `b9eed87` / `best-007` / `release-candidate`)
+- **Hypothesis:** In previous dead-reckoning during the 5s blind window, position was integrated assuming constant velocity direction in the world frame: $\mathbf{v}_w(s) = \mathbf{v}_f \exp(-s/\tau_v) \text{shrink}_v$. In reality, vehicles and humans often negotiate curves, meaning the velocity vector rotates in world space alongside vehicle heading. Transforming velocity into the body frame at cutoff ($\mathbf{v}_{b0} = R(\mathbf{q}_f)^T \mathbf{v}_f$) and numerically integrating world velocity rotated by the decaying orientation ($\mathbf{v}_w(s) = R(\mathbf{q}(s)) \mathbf{v}_{b0} \exp(-s/\tau_v) \text{shrink}_v$) will reconstruct curved trajectories and reduce blind blackout displacement error.
+- **Change:**
+  - Added overloaded `predict_blind_position` and `predict_blind_velocity` functions in `src/blind.cpp` / `src/blind.h` using 50-step Simpson's quadrature integration with zero heap allocations.
+  - Added configuration flags `enable_blind_curvature` and `tau_omega_blind` in `configs/params.json` and `src/params.h`.
+  - Added unit test in `tests/cpp/test_modules.cpp`.
+- **Budget cost:** Zero RSS increase (1,808 KB vs 1,808 KB $\le 4.0$ MB), zero compute overhead (0.60 ms/s vs 0.60 ms/s $\le 5.0$ ms/s), 0 dynamic heap in filter loop, 1 thread.
+- **Dev results (50 paired runs: 5 dev sequences × seeds 1–10 vs `best-007`):**
+  - **Blind 5s RMSE (Target):** 3.7854 m -> 3.6592 m (**-3.33% relative**, delta: -0.1262 m). 95% paired bootstrap CI: `[-0.2462, -0.0122]` m (strictly excludes zero).
+  - **Waypoint ATE RMSE:** 2.1051 m -> 2.0864 m (**-0.89% relative**, delta: -0.0188 m). 95% paired bootstrap CI: `[-0.0281, -0.0103]` m (strictly excludes zero).
+  - **Dropout 2s Gap RMSE:** 5.0901 m -> 5.0820 m (**-0.16% relative**, delta: -0.0082 m). 95% paired bootstrap CI: `[-0.0173, +0.0005]` m (overlaps zero).
+  - **Attitude Error:** 75.9348° -> 75.9348° (**+0.00% relative**, identical).
+  - **Per-sequence Blind 5s deltas:**
+    - MH_01_easy: 4.2437 m -> 4.2619 m (+0.43%)
+    - V1_01_easy: 1.9426 m -> 1.8755 m (-3.46%)
+    - V2_02_medium: 3.2436 m -> 3.4026 m (+4.90%)
+    - room1: 2.6350 m -> 2.3509 m (**-10.78%**, delta: -0.2841 m)
+    - room2: 6.8620 m -> 6.4052 m (**-6.66%**, delta: -0.4568 m)
+- **Physical Analysis:**
+  1. The curvature hypothesis delivers large, statistically significant gains on pedestrian walking datasets (`room1` -10.78%, `room2` -6.66%) because human forward velocity strictly turns with body heading. In turns where sensors blackout (e.g. `room1` seeds 2, 4, 6, 8), blind displacement error dropped by over 1.0 to 1.3 meters.
+  2. However, agile quadrotor flight (`V2_02_medium`) involves aggressive counter-banking, transient lateral slip, and non-coordinated turns. Extrapolating the cutoff angular rate over 5 seconds introduces an artificial turning arc, causing a +4.90% regression on `V2_02_medium`.
+  3. Consequently, the suite-wide mean relative Blind 5s gain is **-3.33%**, which falls below the mandatory **$\ge 5.0\%$ target gain threshold** of Acceptance Rule 1.
+- **Decision:** **PARK** (Acceptance Rule 1 failure: target Blind 5s RMSE relative gain of -3.33% falls below the $\ge 5.0\%$ requirement, despite 95% CI excluding zero and strong pedestrian performance. Recommend parking unless regime-conditioned gating is applied in a future tier).
+
+### Reviewer Checklist (Section 8 / 9)
+
+```
+Reviewer: Reviewer Agent (5db90c77-7a7f-4ddc-890d-0300523ac231)
+Date: 2026-11-13
+Reproduced from commit: 2c30261
+
+- [x] Hypothesis and physical reason recorded.
+- [x] Single change; diff is minimal (Simpson's quadrature in blind.cpp with zero heap).
+- [x] Baseline and new numbers reproduced from a clean checkout, same seeds (seeds 1–10 match worker exactly).
+- [x] Noise floor reported; improvement exceeds 2× std (Failed: -0.1262m Blind 5s mean is below the required 5.0% threshold).
+- [x] Raw-meter scorecard: blind, gap, attitude, per-sequence deltas included.
+- [x] No sequence regressed > 15% (worst sequence regression is V2_02_medium Blind at +4.90%).
+- [x] RSS and ms/s measured on release build with taskset -c 0 (Peak RSS: 1,808 KB, 0.60 ms/s).
+- [x] Tests, sanitizers, fuzz, format audit all pass (1,246 C++ unit checks, 215 pytest cases, ASan/UBSan clean, trajectory format valid).
+- [x] Ledger entry complete; decision follows the acceptance rule.
+- [x] No hard-coded per-dataset constants introduced.
+
+Decision: PARK
+Reason: Violates Acceptance Rule 1 (target Blind 5s RMSE improved by only -3.33% relative across the dev suite, failing the mandatory >= 5.0% improvement threshold; quadrotor flight on V2_02 exhibits slight turning overshoot of +4.90% despite -10.78% gains on pedestrian walking).
+```
+
 ---
