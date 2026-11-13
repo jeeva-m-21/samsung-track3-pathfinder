@@ -1255,6 +1255,11 @@ int run_eskf_full(const char* input_path,
 
                 if (has_refined_bias) {
                     state.b_g = refined_bg;
+                    state.b_a = refined_ba;
+                    for (size_t i = 0; i < 3; ++i) {
+                        P(9 + i, 9 + i) = 1e-6;
+                        P(12 + i, 12 + i) = 1e-4;
+                    }
                 }
 
                 for (size_t idx = 0; idx < init_count; ++idx) {

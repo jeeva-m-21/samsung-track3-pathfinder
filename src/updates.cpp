@@ -228,12 +228,12 @@ bool StationaryBuffer::is_stationary(double g_mag,
     }
 
     double mean_gyro_norm = sum_gyro_norm / static_cast<double>(k);
-    double zupt_gyro_limit = std::min(params::zupt_gyro_mean, 0.015);
+    double zupt_gyro_limit = params::zupt_gyro_mean;
     if (mean_gyro_norm >= zupt_gyro_limit) {
         return false;
     }
 
-    if (gyro_[latest_idx].norm() > 0.015) {
+    if (gyro_[latest_idx].norm() > zupt_gyro_limit * 1.5) {
         return false;
     }
 
