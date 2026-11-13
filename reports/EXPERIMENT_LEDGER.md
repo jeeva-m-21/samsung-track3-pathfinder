@@ -52,3 +52,21 @@
 - **Notes:** Use per-sequence 2× std as acceptance threshold, not cross-sequence std.
 
 ---
+
+## EXP-002: In-stream Post-Gap Tracking Resume vs Failure Latch
+
+- **Date / commit:** 2026-11-13 / `ecb5ae6`
+- **Hypothesis:** Resuming ESKF propagation after temporary in-stream dropouts (rather than latching permanent failure at `T_fail=1.0s`) would improve whole-mission trajectory estimation.
+- **Change:** Reset `blind_predictor` upon valid sample arrival after gap in `src/pipeline.cpp`.
+- **Budget cost:** +0 KB RSS, +0 ms/s
+- **Dev results (seed 1):**
+  - MH_01_easy: ATE 3.307 m (-3.2%), Blind 6.400 m (+38.7%)
+  - V1_01_easy: ATE 2.110 m (+23.0%), Blind 5.579 m (+189%)
+  - V2_02_medium: ATE 8.852 m (+292%), Blind 25.550 m (+387%)
+  - room1: ATE 6.638 m (+427%), Blind 15.293 m (+355%)
+  - room2: ATE 3.514 m (+8.4%), Blind 15.940 m (+36.5%)
+- **Per-sequence deltas:** 3 sequences regressed by > 15% (V1_01 +23%, V2_02 +292%, room1 +427%).
+- **Decision:** REJECT (failed acceptance rules 1, 2, and 3).
+- **Notes / surprises:** Latching failure after 1.0s of continuous invalid data acts as an essential bound on open-loop double-integration drift. In indoor/cyclical flights, pure IMU acceleration integration over 100+ seconds of progressively noisy data drifts quadratically ($0.5 a t^2$), whereas freezing at the last reliable anchor limits worst-case displacement. Retained baseline behavior.
+
+---
