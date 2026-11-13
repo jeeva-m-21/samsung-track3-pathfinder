@@ -225,3 +225,50 @@ Reason: Phase 1 Tasks 1–3 benchmark independently reproduced with identical me
 - **Decision:** N/A (Measurement / Ceilings). Decision gates applied. See `reports/CEILINGS.md`.
 
 ---
+
+## EXP-E14: [Tier 1] Blind Decay Model (Regime-Conditioned Decay)
+
+- **Date / commit:** 2026-11-13 / `7b9101d` (parent `best-005` `7a8562f`)
+- **Hypothesis:** Damping dead-reckoning velocity prediction during the blind 5s window based on platform dynamics (flight vs pedestrian regime) will reduce terminal overshoot. Flight platforms experience aerodynamic drag and control deceleration (`shrink_v=0.7`, `tau_v=2.0s`), whereas pedestrian trajectories exhibit lower speed persistence (`shrink_v=0.9`, `tau_v=2.0s`).
+- **Change:**
+  - Added `shrink_v_flight` (0.7), `tau_v_flight` (2.0s), `shrink_v_ped` (0.9), `tau_v_ped` (2.0s), and `enable_regime_decay` (true) in `configs/params.json` and `src/params.h`.
+  - Stored platform regime in `ReliableRingBuffer` and `FailureDetector`.
+  - Conditioned velocity extrapolation in `predict_blind_position()` on recorded snapshot regime.
+  - Added sweep utility `tools/sweep_blind_grid.py`.
+- **Budget cost:** +0 KB RSS (1,760 KB), +0.10 ms/s (0.76 ms/s vs 0.66 ms/s), 0 dynamic heap in filter loop, 1 thread.
+- **Dev results (50 runs: 5 dev sequences × 10 seeds):**
+  - **Blind 5s RMSE:** 5.3899 m -> 5.3486 m (**-0.77% relative**, delta: -0.0413 m). 95% paired bootstrap CI: `[-0.0889, +0.0039]` m (spans zero).
+  - **Waypoint ATE RMSE:** 2.4089 m -> 2.3939 m (**-0.62% relative**, delta: -0.0150 m).
+  - **Dropout 2s Gap RMSE:** 6.6250 m -> 6.6304 m (**+0.08% relative**, delta: +0.0054 m).
+  - **Per-sequence Blind 5s deltas:**
+    - MH_01_easy: 4.5415 m -> 4.6579 m (+2.56%)
+    - V1_01_easy: 1.9456 m -> 1.8326 m (-5.81%)
+    - V2_02_medium: 5.4270 m -> 5.1674 m (-4.78%)
+    - room1: 3.3572 m -> 3.2778 m (-2.37%)
+    - room2: 11.6784 m -> 11.8074 m (+1.10%)
+- **Decision:** **PARK** (Condition 1 failed; target gain of -0.77% falls below the ≥ 5.0% threshold and 2× noise-floor std; 95% bootstrap CI spans zero).
+- **Notes / Surprises:** Moderate improvements observed in active flight dynamics (V1_01: -5.8%, V2_02: -4.8%), but slight regression on MH_01 (+2.56%) and room2 (+1.10%) dampens the suite-wide mean. The effect size (-0.041 m) is entirely within the measurement noise floor.
+
+### Reviewer Checklist (Section 8 / 9)
+
+```
+Reviewer: Reviewer Agent (5db90c77-7a7f-4ddc-890d-0300523ac231)
+Date: 2026-11-13
+Reproduced from commit: 7b9101d
+
+- [x] Hypothesis and physical reason recorded.
+- [x] Single change; diff is minimal (diff adds 62 lines in src/blind.cpp, 15 in blind.h, 7 in pipeline.cpp).
+- [x] Baseline and new numbers reproduced from a clean checkout, same seeds (seeds 1–10 exact match).
+- [x] Noise floor reported; improvement exceeds 2× std (Failed: -0.0413 m is inside noise floor; 2× std is 0.115 m on MH_01, 2.112 m on room1).
+- [x] Raw-meter scorecard: blind, gap, attitude, per-sequence deltas included.
+- [x] No sequence regressed > 15% (worst sequence regression is MH_01 blind at +2.56%).
+- [x] RSS and ms/s measured on release build with taskset -c 0 (Peak RSS: 1,760 KB, 0.76 ms/s).
+- [x] Tests, sanitizers, fuzz, format audit all pass (1,241 C++ unit checks, 215 pytest cases, ASan/UBSan clean, trajectory format valid).
+- [x] Ledger entry complete; decision follows the acceptance rule.
+- [x] No hard-coded per-dataset constants introduced.
+
+Decision: PARK
+Reason: Acceptance Rule 1 failure. The target component (Blind 5s RMSE) improved by only -0.77% relative (-0.0413 m), failing the ≥ 5.0% threshold, failing the ≥ 2× noise-floor std threshold, and the 95% bootstrap CI [-0.0889, +0.0039] m spans zero.
+```
+
+---
