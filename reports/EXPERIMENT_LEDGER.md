@@ -70,3 +70,21 @@
 - **Notes / surprises:** Latching failure after 1.0s of continuous invalid data acts as an essential bound on open-loop double-integration drift. In indoor/cyclical flights, pure IMU acceleration integration over 100+ seconds of progressively noisy data drifts quadratically ($0.5 a t^2$), whereas freezing at the last reliable anchor limits worst-case displacement. Retained baseline behavior.
 
 ---
+
+## EXP-003: Pre-Gap Gyro Rate Hold in Gap Propagation
+
+- **Date / commit:** 2026-11-13 / `e9d897a`
+- **Hypothesis:** Propagating gaps using the pre-gap smoothed bias-corrected gyro rate (rather than corrupting `omega_s_` with a large dt and single noisy post-gap sample) prevents fictitious orientation tilts that caused multi-meter acceleration drift after dropouts.
+- **Change:** Moved `omega_s_` update to occur after gap sub-stepping in `src/gap.cpp`, holding pre-gap rate during `propagate_gap`.
+- **Budget cost:** +0 KB RSS, +0 ms/s
+- **Dev results (10 seeds, 5 sequences, LOOCV):**
+  - MH_01_easy: ATE 3.607m (+5.5%), **Blind5 1.834m (-59.6%)**, **Gap2s 6.704m (-47.3%)**, **RPE1s 0.550m (-16.5%)**
+  - room2: **ATE 2.153m (-33.6%)**, **Blind5 7.707m (-34.0%)**, **Gap2s 6.595m (-39.0%)**, **RPE1s 1.123m (-22.4%)**
+  - V1_01_easy: ATE 1.704m (-0.6%), Blind5 3.612m (+85.7%), Gap2s 3.054m (+60.7%)
+  - V2_02_medium: ATE 3.317m (+46.4%), Blind5 11.953m (+120.3%), Gap2s 8.347m (+84.6%)
+  - room1: ATE 2.223m (+58.4%), Blind5 8.679m (+158.5%), Gap2s 7.059m (+123.2%)
+- **Per-sequence deltas:** Massive 34%–60% improvements on MH_01 and room2, but V2_02 (+46%) and room1 (+58%) regressed by > 15%.
+- **Decision:** **PARK** (Tradeoff: passes Condition 1 with massive gains on 2 sequences, but fails Condition 3 on agile/turning sequences).
+- **Notes / surprises:** On gentle/hovering sequences (MH_01, room2), holding the pre-gap gyro rate halved blind and gap errors. However, on agile sequences with rapid turns (V2_02, room1), holding an un-decayed turning rate over 1.5 seconds rotates the attitude by up to 90 degrees, causing severe over-rotation. Insight: angular velocity during gaps must be decayed towards zero ($e^{-t/\tau_\omega}$) to prevent over-rotation on dynamic turns.
+
+---
