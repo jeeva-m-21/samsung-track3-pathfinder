@@ -1,4 +1,5 @@
 #include "pipeline.h"
+#include "spike.h"
 #include <algorithm>
 #include <cmath>
 #include <cinttypes>
@@ -1459,21 +1460,21 @@ int run_eskf_full(const char* input_path,
         delay_buf.push(t_curr, state.p, state.q, false, collector);
     };
 
-    while (reader.next(sample)) {
-        Vec3 w_curr = math::make_vec3(sample.wx, sample.wy, sample.wz);
-        Vec3 acc_curr = math::make_vec3(sample.ax, sample.ay, sample.az);
+    auto handle_sample = [&](const io::IMUSample& smp) {
+        Vec3 w_curr = math::make_vec3(smp.wx, smp.wy, smp.wz);
+        Vec3 acc_curr = math::make_vec3(smp.ax, smp.ay, smp.az);
 
         if (!is_initialized) {
             if (init_count < MAX_INIT_SAMPLES) {
-                s_init_buf[init_count].t_ns = sample.t_ns;
+                s_init_buf[init_count].t_ns = smp.t_ns;
                 s_init_buf[init_count].omega = w_curr;
                 s_init_buf[init_count].acc = acc_curr;
-                s_init_buf[init_count].is_valid = sample.is_valid;
+                s_init_buf[init_count].is_valid = smp.is_valid;
                 init_count++;
             }
 
-            if (sample.is_valid) {
-                initializer.add_sample(sample.t_ns, w_curr, acc_curr);
+            if (smp.is_valid) {
+                initializer.add_sample(smp.t_ns, w_curr, acc_curr);
             }
 
             if (initializer.is_ready() || (!is_initialized && init_count >= MAX_INIT_SAMPLES)) {
@@ -1546,10 +1547,28 @@ int run_eskf_full(const char* input_path,
                     process_full_step(t_smp, w_smp, a_smp);
                 }
             }
-            continue;
+            return;
         }
 
-        process_full_step(sample.t_ns, w_curr, acc_curr);
+        process_full_step(smp.t_ns, w_curr, acc_curr);
+    };
+
+    SpikeFilter spike_filter;
+    bool use_spike_filter = params::enable_spike_filter && !options.disable_spike_filter;
+    if (use_spike_filter) {
+        io::IMUSample filt_sample;
+        while (reader.next(sample)) {
+            if (spike_filter.process(sample, filt_sample)) {
+                handle_sample(filt_sample);
+            }
+        }
+        if (spike_filter.flush(filt_sample)) {
+            handle_sample(filt_sample);
+        }
+    } else {
+        while (reader.next(sample)) {
+            handle_sample(sample);
+        }
     }
 
     // Fallback if file was shorter than T_init
@@ -1588,6 +1607,7 @@ int run_eskf_full(const char* input_path,
             has_refined_bias = true;
         }
         reader.rewind();
+        spike_filter.reset();
         initializer.reset();
         gap_handler.reset();
         monitor.reset();
