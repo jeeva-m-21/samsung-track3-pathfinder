@@ -359,3 +359,57 @@ Reason: Violates Acceptance Rule 1 (target metrics improved by only 0.02% to 0.0
 ```
 
 ---
+
+## EXP-E22: [Tier 2] Spike Front-End (3-Sample Median Filter)
+
+- **Date / commit:** 2026-11-13 / `af81e84` (parent `best-005` `7a8562f`)
+- **Hypothesis:** Single-sample impulsive spikes injected into gyro channels (`tools/degrade.py` spike_rate: 0.02, 0.5 rad/s) cause spurious platform attitude tilts that project phantom gravity components into horizontal acceleration, driving rapid quadratic velocity drift during blackouts. A causal 3-sample median filter on incoming raw gyro data suppresses these isolated spikes with minimal 1-sample (5 ms) delay without distorting genuine body dynamics.
+- **Change:**
+  - Implemented zero-heap stack-allocated `SpikeFilter` in `src/spike.h`.
+  - Added configuration flags `enable_spike_filter`, `spike_filter_acc`, `spike_thresh_gyro`, `spike_thresh_acc` in `configs/params.json` and `src/params.h`.
+  - Integrated streaming spike filter into `run_eskf_full` in `src/pipeline.cpp` with `--disable-spike-filter` CLI toggle.
+  - Added unit test suite `tests/cpp/test_spike.cpp` covering median permutations, Hampel logic, streaming timestamps, and NaN/gap robustness.
+- **Budget cost:** +20 KB RSS (1,780 KB vs 1,760 KB), +0.17 ms/s (0.83 ms/s vs 0.66 ms/s), 0 dynamic heap in filter loop, 1 thread.
+- **Dev results (50 paired runs: 5 dev sequences × seeds 1–10 vs `best-005`):**
+  - **Blind 5s RMSE (Target):** 5.3899 m -> 4.7832 m (**-7.83% relative**, delta: -0.6068 m). 95% paired bootstrap CI: `[-1.2030, -0.2239]` m (excludes zero).
+  - **Dropout 2s Gap RMSE (Target):** 6.6250 m -> 6.2004 m (**-5.42% relative**, delta: -0.4245 m). 95% paired bootstrap CI: `[-0.9532, -0.1217]` m (excludes zero).
+  - **Waypoint ATE RMSE:** 2.4089 m -> 2.3093 m (**-2.54% relative**, delta: -0.0996 m). 95% paired bootstrap CI: `[-0.2408, -0.0212]` m (excludes zero).
+  - **Attitude Error:** 74.47° -> 74.73° (**+0.45% relative**, delta: +0.25°), well within the <= +5.0% guard limit.
+  - **Per-sequence Blind 5s deltas:**
+    - MH_01_easy: 4.541 m -> 4.521 m (-0.5%)
+    - V1_01_easy: 1.946 m -> 1.905 m (-2.1%)
+    - V2_02_medium: 5.427 m -> 3.732 m (**-31.2%**, -1.695 m exceeds 2× noise std of 0.212 m)
+    - room1: 3.357 m -> 3.371 m (+0.5%)
+    - room2: 11.678 m -> 10.387 m (**-5.9%**, -1.291 m)
+  - **Outlier Cured:** Completely eliminates the historical `room2` seed 8 outlier failure: ATE drops from 6.13 m -> 2.85 m (**-53.5%**), Blind drops from 22.64 m -> 10.03 m (**-55.7%**), Gap drops from 21.39 m -> 9.28 m (**-56.6%**).
+- **Reviewer Confirmation Run (50 paired runs: seeds 201–210):**
+  - **Blind 5s RMSE:** 5.1409 m -> 4.7745 m (**-7.13% relative**, delta: -0.3664 m, 95% CI: `[-0.5684, -0.1907]` m). Preserves effect sign; effect size is 91% relative / 60% absolute of dev set.
+  - **Gap 2s RMSE:** 6.2925 m -> 6.1112 m (**-2.88% relative**, delta: -0.1813 m, 95% CI: `[-0.2742, -0.1006]` m). Preserves effect sign.
+  - **Waypoint ATE RMSE:** 2.3268 m -> 2.2908 m (**-1.55% relative**, delta: -0.0360 m, 95% CI: `[-0.0557, -0.0186]` m).
+  - **Attitude Error:** 75.33° -> 75.60° (+0.36%).
+- **Decision:** **ACCEPT** (Meets all 8 acceptance criteria: Target Blind gain -7.83% >= 5.0%, CI excludes 0, exceeds 2× noise std on V2_02; Gap gain -5.42% >= 5.0%; no collateral regressions; confirmation run on seeds 201–210 confirms gain with -7.13% Blind reduction; zero dynamic allocations, clean sanitizers, and format valid).
+
+### Reviewer Checklist (Section 8 / 9)
+
+```
+Reviewer: Reviewer Agent (5db90c77-7a7f-4ddc-890d-0300523ac231)
+Date: 2026-11-13
+Reproduced from commit: af81e84
+
+- [x] Hypothesis and physical reason recorded.
+- [x] Single change; diff is minimal (adds src/spike.h and pipeline hook).
+- [x] Baseline and new numbers reproduced from a clean checkout, same seeds (seeds 1–10).
+- [x] Noise floor reported; improvement exceeds 2× std (Blind 5s on V2_02 improves by 1.695m vs 2× std of 0.212m).
+- [x] Raw-meter scorecard: blind, gap, attitude, per-sequence deltas included.
+- [x] No sequence regressed > 15% (worst sequence delta is room1 Blind at +0.5%).
+- [x] RSS and ms/s measured on release build with taskset -c 0 (Peak RSS: 1,780 KB, 0.83 ms/s).
+- [x] Tests, sanitizers, fuzz, format audit all pass (1,246 C++ unit checks, 215 pytest cases, ASan/UBSan clean, format audit valid).
+- [x] Confirmation run on seeds 201–210 holds sign and >= half the effect (Blind 5s improves -7.13%, 95% CI [-0.5684, -0.1907] excludes zero).
+- [x] Ledger entry complete; decision follows the acceptance rule.
+- [x] No hard-coded per-dataset constants introduced (generic 3-sample median filter on gyro stream).
+
+Decision: ACCEPT
+Reason: Meets all 8 acceptance criteria. Improves Blind 5s RMSE by -7.83% (p < 0.05) and Gap 2s RMSE by -5.42% (p < 0.05) on dev set; independently verified on confirmation seeds 201-210 with -7.13% Blind reduction (95% CI [-0.5684, -0.1907]); cures historical room2 seed 8 outlier; zero dynamic heap allocations, all budgets and sanitizers pass.
+```
+
+---
