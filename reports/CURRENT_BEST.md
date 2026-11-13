@@ -1,9 +1,21 @@
-# CURRENT BEST — Track 03 "Path Finder"
+# CURRENT BEST & FINAL RELEASE — Track 03 "Path Finder"
 
-**Last updated:** 2026-11-13
-**Current best tag:** `best-007`
-**Commit:** `16744c8`
-**Phase:** 5 (Parameter Optimization on Frozen Architecture)
+**Last updated:** 2026-11-13  
+**Final Release Tag:** `release-candidate` / `submission-final`  
+**Commit:** `b9eed87` (eval report: `46a7c15`)  
+**Phase:** 5 (Sealed Final Set Evaluation & Submission Candidate Complete)  
+
+---
+
+## Final Scorecard (Sealed Final Set, 10 seeds 101–110, 50 runs, `./main`)
+
+| Metric | Baseline (`35c3334`) | Final (`b9eed87`) | Median | Relative Delta vs Baseline | Notes |
+|--------|:---:|:---:|:---:|:---:|:---|
+| **Waypoint ATE RMSE (m)** | 5.787 | **2.132** | 1.994 | **-63.2%** (-3.655 m) | Aligned SE(3) Umeyama; matches dev within 1.3% ✅ |
+| **Blind 5 s RMSE (m)** | 18.065 | **3.934** | 3.698 | **-78.2%** (-14.131 m) | Terminal cutoff dead reckoning; matches dev within 3.9% ✅ |
+| **Gap 2 s RMSE (m)** | 15.654 | **5.153** | 3.318 | **-67.1%** (-10.501 m) | In-stream blackout gap; matches dev within 1.2% ✅ |
+| **Peak RSS** | 1.76 MB | **1.78 MB** | — | Compliant | ✅ Target $\le 4.0$ MB passed (1,780 KB measured) |
+| **Compute** | 0.66 ms/s | **0.65 ms/s** | — | Compliant | ✅ Target $\le 5.0$ ms/s passed (taskset -c 0) |
 
 ---
 
