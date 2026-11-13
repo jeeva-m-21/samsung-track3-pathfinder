@@ -2,7 +2,7 @@
   "team": "VITC_SingleThread",
   "track": "Track 3: Path Finder (IMU-Only Dead-Reckoning)",
   "implementation": "C++17, single thread, zero dynamic heap allocation",
-  "peak_rss_kb": 1684,
+  "peak_rss_kb": 1876,
   "cpu_ms_per_second_of_imu": 1.25,
   "samples": 28826,
   "data_duration_s": 144.125,
@@ -26,5 +26,5 @@
     "dropout_rmse_m": 6.8851,
     "rpe_1s_rmse_m": 0.5288
   },
-  "commit": "bba8753"
+  "commit": "3003a1c"
 }
