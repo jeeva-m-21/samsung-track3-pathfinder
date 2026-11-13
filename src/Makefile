@@ -60,6 +60,7 @@ $(TEST_MODULES_TARGET): $(TEST_MODULES_SRC) $(MODULE_OBJS) $(DEPS) | $(BUILD_DIR
 	$(CXX) $(CXXFLAGS) -I. -I$(REPO_ROOT) -o $@ $(TEST_MODULES_SRC) $(MODULE_OBJS) $(LDFLAGS)
 
 sanitize: CXXFLAGS += -fsanitize=address,undefined -fno-omit-frame-pointer -g
+sanitize: LDFLAGS =
 sanitize: clean $(TARGET) $(TEST_MATH_TARGET) $(TEST_ESKF_TARGET) $(TEST_MODULES_TARGET) $(TEST_SPIKE_TARGET)
 
 clean:
