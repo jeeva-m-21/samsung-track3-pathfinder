@@ -25,6 +25,7 @@ constexpr double noise_mult_gyro = 71.03712479781508;
 constexpr double noise_mult_acc = 5.320683277986699;
 constexpr double walk_mult_bg = 3.9488605605282023;
 constexpr double walk_mult_ba = 35.80135071389043;
+constexpr bool enable_centripetal_comp = false;
 constexpr double sigma_g_base = 0.00017;
 constexpr double sigma_a_base = 0.002;
 constexpr double sigma_bg_base = 1.9e-05;
@@ -66,10 +67,13 @@ constexpr double two_pass_cutoff_period = 45.0;
 constexpr double tau_ou = 1.8;
 constexpr bool enable_inekf_transition = true;
 constexpr bool enable_rotor_drag = false;
-constexpr double rotor_drag_kd = 0.20;
-constexpr double rotor_drag_sigma = 0.50;
+constexpr double rotor_drag_kd = 0.2;
+constexpr double rotor_drag_sigma = 0.5;
 constexpr double rotor_drag_gate = 12.0;
-constexpr bool enable_centripetal_comp = false;
+constexpr bool enable_rts_smoother = false;
+constexpr double rts_min_span = 1.5;
+constexpr double rts_sigma_a = 0.5;
+constexpr double rts_r_p = 0.001;
 
 } // namespace params
 

@@ -27,6 +27,7 @@ struct DelayedPose {
 
 static constexpr size_t MAX_TRAJECTORY_SAMPLES = 120000;
 static Vec3 s_pos_pass1[MAX_TRAJECTORY_SAMPLES];
+static int64_t s_time_pass1[MAX_TRAJECTORY_SAMPLES];
 
 struct TrajectoryCollector {
     FILE* tmp_file;
@@ -56,6 +57,7 @@ struct TrajectoryCollector {
         if (!active) return;
         if (count < MAX_TRAJECTORY_SAMPLES) {
             s_pos_pass1[count] = math::make_vec3(px, py, pz);
+            s_time_pass1[count] = t_ns;
             count++;
         }
         if (tmp_file) {
@@ -129,6 +131,248 @@ void apply_bounded_workspace_filter(Vec3* pos, size_t count, double dt_nom, doub
             d2 = b2 * x_n - a2 * val;
             pos[n].data[c] = val;
         }
+    }
+
+    // Ensure strict start at p(0) = 0
+    Vec3 p0 = pos[0];
+    for (size_t i = 0; i < count; ++i) {
+        pos[i] = pos[i] - p0;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Checkpointed Position-Velocity Rauch-Tung-Striebel (PV-RTS) Backward Smoother
+// Decoupled kinematic double integrator with chunked forward-checkpointing
+// to strictly guarantee <= 8.0 MB peak RAM.
+// ---------------------------------------------------------------------------
+struct RTSCheckpoint {
+    Vec3 x[2]; // x[0] = p, x[1] = v
+    double P00;
+    double P01;
+    double P11;
+};
+
+static constexpr size_t RTS_CHUNK_SIZE = 128;
+static constexpr size_t MAX_RTS_CHECKPOINTS = (MAX_TRAJECTORY_SAMPLES + RTS_CHUNK_SIZE - 1) / RTS_CHUNK_SIZE + 4;
+static RTSCheckpoint s_rts_checkpoints[MAX_RTS_CHECKPOINTS];
+
+static constexpr size_t RTS_BUF_SIZE = RTS_CHUNK_SIZE + 4;
+static Vec3 s_chunk_x_filt[RTS_BUF_SIZE][2];
+static Vec3 s_chunk_x_pred[RTS_BUF_SIZE][2];
+static double s_chunk_P_filt[RTS_BUF_SIZE][3]; // 0: P00, 1: P01, 2: P11
+static double s_chunk_P_pred[RTS_BUF_SIZE][3];
+static Vec3 s_chunk_x_smooth[RTS_BUF_SIZE][2];
+
+void apply_pv_rts_smoother(Vec3* pos, const int64_t* times, size_t count, double dt_nom) {
+    if (count < 15 || dt_nom <= 0.0) {
+        return;
+    }
+
+    // Check spatial span of trajectory
+    double min_x = pos[0].data[0], max_x = pos[0].data[0];
+    double min_y = pos[0].data[1], max_y = pos[0].data[1];
+    double min_z = pos[0].data[2], max_z = pos[0].data[2];
+    for (size_t i = 0; i < count; ++i) {
+        if (!std::isfinite(pos[i].data[0]) || !std::isfinite(pos[i].data[1]) || !std::isfinite(pos[i].data[2])) {
+            pos[i] = math::make_vec3(0.0, 0.0, 0.0);
+        }
+        if (pos[i].data[0] < min_x) min_x = pos[i].data[0];
+        if (pos[i].data[0] > max_x) max_x = pos[i].data[0];
+        if (pos[i].data[1] < min_y) min_y = pos[i].data[1];
+        if (pos[i].data[1] > max_y) max_y = pos[i].data[1];
+        if (pos[i].data[2] < min_z) min_z = pos[i].data[2];
+        if (pos[i].data[2] > max_z) max_z = pos[i].data[2];
+    }
+    double span_x = max_x - min_x;
+    double span_y = max_y - min_y;
+    double span_z = max_z - min_z;
+    double max_span = std::max({span_x, span_y, span_z});
+    if (max_span < params::rts_min_span) {
+        // Bypass smoothing for static or degenerate synthetic trajectories
+        return;
+    }
+
+    const double sigma_a = params::rts_sigma_a;
+    const double sigma_a_sq = sigma_a * sigma_a;
+    const double R_p = params::rts_r_p;
+
+    // Estimate initial velocity at step 0
+    double dt0 = (count > 1) ? static_cast<double>(times[1] - times[0]) * 1e-9 : dt_nom;
+    if (dt0 <= 0.0 || dt0 > 1.0) dt0 = dt_nom;
+    Vec3 v0 = (pos[1] - pos[0]) / dt0;
+
+    // Checkpoint 0
+    s_rts_checkpoints[0].x[0] = pos[0];
+    s_rts_checkpoints[0].x[1] = v0;
+    s_rts_checkpoints[0].P00 = 1e-4;
+    s_rts_checkpoints[0].P01 = 0.0;
+    s_rts_checkpoints[0].P11 = 1e-3;
+
+    Vec3 curr_x[2] = { pos[0], v0 };
+    double curr_P00 = 1e-4;
+    double curr_P01 = 0.0;
+    double curr_P11 = 1e-3;
+
+    const size_t num_checkpoints = (count + RTS_CHUNK_SIZE - 1) / RTS_CHUNK_SIZE;
+
+    // Pass 1: Forward propagation with checkpointing every RTS_CHUNK_SIZE steps
+    for (size_t k = 0; k < count - 1; ++k) {
+        double dt_k = static_cast<double>(times[k + 1] - times[k]) * 1e-9;
+        if (dt_k <= 0.0 || dt_k > 1.0) {
+            dt_k = dt_nom;
+        }
+
+        double dt_sq = dt_k * dt_k;
+        double q00 = sigma_a_sq * 0.25 * dt_sq * dt_sq;
+        double q01 = sigma_a_sq * 0.5 * dt_sq * dt_k;
+        double q11 = sigma_a_sq * dt_sq;
+
+        double P_pred_00 = curr_P00 + 2.0 * dt_k * curr_P01 + dt_sq * curr_P11 + q00;
+        double P_pred_01 = curr_P01 + dt_k * curr_P11 + q01;
+        double P_pred_11 = curr_P11 + q11;
+
+        Vec3 x_pred_0 = curr_x[0] + curr_x[1] * dt_k;
+        Vec3 x_pred_1 = curr_x[1];
+
+        double S = P_pred_00 + R_p;
+        double inv_S = 1.0 / S;
+        double K0 = P_pred_00 * inv_S;
+        double K1 = P_pred_01 * inv_S;
+
+        curr_P00 = (1.0 - K0) * P_pred_00;
+        curr_P01 = (1.0 - K0) * P_pred_01;
+        curr_P11 = P_pred_11 - K1 * P_pred_01;
+
+        Vec3 innov = pos[k + 1] - x_pred_0;
+        curr_x[0] = x_pred_0 + innov * K0;
+        curr_x[1] = x_pred_1 + innov * K1;
+
+        if ((k + 1) % RTS_CHUNK_SIZE == 0) {
+            size_t idx = (k + 1) / RTS_CHUNK_SIZE;
+            if (idx < num_checkpoints && idx < MAX_RTS_CHECKPOINTS) {
+                s_rts_checkpoints[idx].x[0] = curr_x[0];
+                s_rts_checkpoints[idx].x[1] = curr_x[1];
+                s_rts_checkpoints[idx].P00 = curr_P00;
+                s_rts_checkpoints[idx].P01 = curr_P01;
+                s_rts_checkpoints[idx].P11 = curr_P11;
+            }
+        }
+    }
+
+    // Terminal condition for backward pass
+    Vec3 smooth_boundary_x[2] = { curr_x[0], curr_x[1] };
+    pos[count - 1] = smooth_boundary_x[0];
+
+    // Pass 2: Chunk-by-chunk backward RTS smoothing
+    size_t num_chunks = (count - 1 + RTS_CHUNK_SIZE - 1) / RTS_CHUNK_SIZE;
+    for (size_t chunk_idx = num_chunks; chunk_idx > 0; --chunk_idx) {
+        size_t chunk = chunk_idx - 1;
+        size_t k_start = chunk * RTS_CHUNK_SIZE;
+        size_t k_end = std::min((chunk + 1) * RTS_CHUNK_SIZE, count - 1);
+        size_t chunk_len = k_end - k_start;
+
+        if (chunk >= MAX_RTS_CHECKPOINTS) {
+            continue;
+        }
+
+        // Initialize local chunk scratch from checkpoint
+        s_chunk_x_filt[0][0] = s_rts_checkpoints[chunk].x[0];
+        s_chunk_x_filt[0][1] = s_rts_checkpoints[chunk].x[1];
+        s_chunk_P_filt[0][0] = s_rts_checkpoints[chunk].P00;
+        s_chunk_P_filt[0][1] = s_rts_checkpoints[chunk].P01;
+        s_chunk_P_filt[0][2] = s_rts_checkpoints[chunk].P11;
+
+        // Re-simulate forward for this chunk
+        for (size_t i = 0; i < chunk_len; ++i) {
+            size_t k = k_start + i;
+            double dt_k = static_cast<double>(times[k + 1] - times[k]) * 1e-9;
+            if (dt_k <= 0.0 || dt_k > 1.0) {
+                dt_k = dt_nom;
+            }
+
+            double dt_sq = dt_k * dt_k;
+            double q00 = sigma_a_sq * 0.25 * dt_sq * dt_sq;
+            double q01 = sigma_a_sq * 0.5 * dt_sq * dt_k;
+            double q11 = sigma_a_sq * dt_sq;
+
+            double P_prev_00 = s_chunk_P_filt[i][0];
+            double P_prev_01 = s_chunk_P_filt[i][1];
+            double P_prev_11 = s_chunk_P_filt[i][2];
+
+            double P_pred_00 = P_prev_00 + 2.0 * dt_k * P_prev_01 + dt_sq * P_prev_11 + q00;
+            double P_pred_01 = P_prev_01 + dt_k * P_prev_11 + q01;
+            double P_pred_11 = P_prev_11 + q11;
+
+            s_chunk_P_pred[i + 1][0] = P_pred_00;
+            s_chunk_P_pred[i + 1][1] = P_pred_01;
+            s_chunk_P_pred[i + 1][2] = P_pred_11;
+
+            s_chunk_x_pred[i + 1][0] = s_chunk_x_filt[i][0] + s_chunk_x_filt[i][1] * dt_k;
+            s_chunk_x_pred[i + 1][1] = s_chunk_x_filt[i][1];
+
+            double S = P_pred_00 + R_p;
+            double inv_S = 1.0 / S;
+            double K0 = P_pred_00 * inv_S;
+            double K1 = P_pred_01 * inv_S;
+
+            s_chunk_P_filt[i + 1][0] = (1.0 - K0) * P_pred_00;
+            s_chunk_P_filt[i + 1][1] = (1.0 - K0) * P_pred_01;
+            s_chunk_P_filt[i + 1][2] = P_pred_11 - K1 * P_pred_01;
+
+            Vec3 innov = pos[k + 1] - s_chunk_x_pred[i + 1][0];
+            s_chunk_x_filt[i + 1][0] = s_chunk_x_pred[i + 1][0] + innov * K0;
+            s_chunk_x_filt[i + 1][1] = s_chunk_x_pred[i + 1][1] + innov * K1;
+        }
+
+        // Backward recursion inside chunk
+        s_chunk_x_smooth[chunk_len][0] = smooth_boundary_x[0];
+        s_chunk_x_smooth[chunk_len][1] = smooth_boundary_x[1];
+
+        for (size_t i_rev = chunk_len; i_rev > 0; --i_rev) {
+            size_t i = i_rev - 1;
+            size_t k = k_start + i;
+            double dt_k = static_cast<double>(times[k + 1] - times[k]) * 1e-9;
+            if (dt_k <= 0.0 || dt_k > 1.0) {
+                dt_k = dt_nom;
+            }
+
+            // P_filt at i * F^T
+            double P_f_00 = s_chunk_P_filt[i][0];
+            double P_f_01 = s_chunk_P_filt[i][1];
+            double P_f_11 = s_chunk_P_filt[i][2];
+
+            double M00 = P_f_00 + dt_k * P_f_01;
+            double M01 = P_f_01;
+            double M10 = P_f_01 + dt_k * P_f_11;
+            double M11 = P_f_11;
+
+            // Invert P_pred at i+1
+            double A = s_chunk_P_pred[i + 1][0];
+            double B = s_chunk_P_pred[i + 1][1];
+            double D = s_chunk_P_pred[i + 1][2];
+
+            double det = A * D - B * B;
+            if (det < 1e-15) {
+                det = 1e-15;
+            }
+            double inv_det = 1.0 / det;
+
+            double C00 = (M00 * D - M01 * B) * inv_det;
+            double C01 = (-M00 * B + M01 * A) * inv_det;
+            double C10 = (M10 * D - M11 * B) * inv_det;
+            double C11 = (-M10 * B + M11 * A) * inv_det;
+
+            Vec3 diff_p = s_chunk_x_smooth[i + 1][0] - s_chunk_x_pred[i + 1][0];
+            Vec3 diff_v = s_chunk_x_smooth[i + 1][1] - s_chunk_x_pred[i + 1][1];
+
+            s_chunk_x_smooth[i][0] = s_chunk_x_filt[i][0] + diff_p * C00 + diff_v * C01;
+            s_chunk_x_smooth[i][1] = s_chunk_x_filt[i][1] + diff_p * C10 + diff_v * C11;
+
+            pos[k] = s_chunk_x_smooth[i][0];
+        }
+
+        smooth_boundary_x[0] = s_chunk_x_smooth[0][0];
+        smooth_boundary_x[1] = s_chunk_x_smooth[0][1];
     }
 
     // Ensure strict start at p(0) = 0
@@ -1122,6 +1366,11 @@ int run_eskf_full(const char* input_path,
     // Apply Pass 2 bounded-workspace filter ONLY to the active flight segment
     if (params::enable_two_pass_filter && active_count > 0) {
         apply_bounded_workspace_filter(s_pos_pass1, active_count, dt_nom, params::two_pass_cutoff_period);
+    }
+
+    // Apply Checkpointed PV-RTS backward smoother ONLY to the active flight segment
+    if (params::enable_rts_smoother && active_count > 0) {
+        apply_pv_rts_smoother(s_pos_pass1, s_time_pass1, active_count, dt_nom);
     }
 
     // If failure occurred during stream, shift subsequent dead-reckoned poses

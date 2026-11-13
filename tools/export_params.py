@@ -107,6 +107,12 @@ def main() -> None:
     export_params(args.input, args.output)
     print(f"Exported {args.input} -> {args.output}")
 
+    # Also export to src/params.h if it exists
+    src_header = repo_root / "src" / "params.h"
+    if src_header.parent.exists() and args.output != src_header:
+        export_params(args.input, src_header)
+        print(f"Exported {args.input} -> {src_header}")
+
 
 if __name__ == "__main__":
     main()
