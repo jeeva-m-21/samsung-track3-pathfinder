@@ -316,3 +316,46 @@ Reason: Violates Acceptance Rule 1 (target Gap 2s RMSE improved by only -0.10% r
 ```
 
 ---
+
+## EXP-E20: [Tier 2] Sensor-Noise Schedule & Bias Walk Uncoupling
+
+- **Date / commit:** 2026-11-13 / `b113c03` (parent `best-005` `7a8562f`)
+- **Hypothesis:** Decoupling the bias random walk diffusion in `src/eskf.cpp` from the dynamic noise degradation factor $\kappa$ would prevent process covariance over-inflation. Additionally, testing a time-scheduled noise ramp ($1 + 0.05 \cdot t$) matching degradation specifications.
+- **Change:**
+  - Added `uncouple_bias_kappa`, `enable_scheduled_noise`, and `noise_growth_rate` configuration parameters.
+  - Parameterized `build_q_matrix()` in `src/eskf.cpp` with `bias_kappa`.
+  - Added comparison script `tools/eval_e20_comparison.py`.
+- **Budget cost:** +0 KB RSS (1,760 KB), +0.11 ms/s (0.77 ms/s vs 0.66 ms/s), 0 dynamic heap in filter loop, 1 thread.
+- **Dev results (50 runs: 5 dev sequences × 10 seeds):**
+  - **Waypoint ATE RMSE:** 2.4094 m -> 2.4089 m (**-0.02% relative**, delta: -0.0005 m). 95% paired bootstrap CI: `[-0.0008, -0.0003]` m.
+  - **Blind 5s RMSE:** 5.3940 m -> 5.3899 m (**-0.08% relative**, delta: -0.0040 m). 95% paired bootstrap CI: `[-0.0064, -0.0019]` m.
+  - **Dropout 2s Gap RMSE:** 6.6233 m -> 6.6250 m (**+0.03% relative**, delta: +0.0017 m). 95% paired bootstrap CI: `[+0.0008, +0.0027]` m.
+  - **Attitude Error:** 74.475° -> 74.474° (**-0.00% relative**, delta: -0.0016°).
+- **Physical Analysis:**
+  1. The baseline filter implementation in `best-005` already did not multiply `sigma_bg` or `sigma_ba` by $\kappa$; bias random walk was already decoupled in the code. Setting `uncouple_bias_kappa = true` produced an identity transformation, explaining the microscopic (< 0.1%) delta.
+  2. Enabling scheduled noise ramp (`enable_scheduled_noise = true`) caused massive overconfidence during platform turns on agile sequences (V2_02 ATE regressed by +95%), violating Rule 3.
+- **Decision:** **REJECT** (Rule 1 failed: target improvements < 0.1% relative, far below the >= 5.0% threshold and within noise floor; scheduled noise model severely regresses agile trajectories).
+
+### Reviewer Checklist (Section 8 / 9)
+
+```
+Reviewer: Reviewer Agent (5db90c77-7a7f-4ddc-890d-0300523ac231)
+Date: 2026-11-13
+Reproduced from commit: b113c03
+
+- [x] Hypothesis and physical reason recorded.
+- [x] Single change; diff is minimal.
+- [x] Baseline and new numbers reproduced from a clean checkout, same seeds (seeds 1–10).
+- [x] Noise floor reported; improvement exceeds 2× std (Failed: deltas of 0.0005m ATE and 0.0040m Blind are deep inside the noise floor).
+- [x] Raw-meter scorecard: blind, gap, attitude, per-sequence deltas included.
+- [x] No sequence regressed > 15% (for default uncoupled mode; scheduled ramp regressed V2_02 by +95%).
+- [x] RSS and ms/s measured on release build with taskset -c 0 (Peak RSS: 1,760 KB, 0.77 ms/s).
+- [x] Tests, sanitizers, fuzz, format audit all pass (1,241 C++ unit checks, 215 pytest cases, ASan/UBSan clean, trajectory format valid).
+- [x] Ledger entry complete; decision follows the acceptance rule.
+- [x] No hard-coded per-dataset constants introduced.
+
+Decision: REJECT
+Reason: Violates Acceptance Rule 1 (target metrics improved by only 0.02% to 0.08%, failing the >= 5.0% threshold and strictly inside the noise floor; scheduled noise ramp causes +95% regression on agile flight).
+```
+
+---
