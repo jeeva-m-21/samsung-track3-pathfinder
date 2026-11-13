@@ -156,3 +156,20 @@ Reason: Phase 1 Tasks 1–3 benchmark independently reproduced with identical me
 ```
 
 ---
+
+## EXP-006: [Phase 2 Task 1] Noise-Schedule Bounding via Kappa Clamping
+
+- **Date / commit:** 2026-11-13 / `0ebb0f5`
+- **Hypothesis:** Clamping `kappa_max` from 50.0 to 10.0 to match the empirical degradation envelope ($1 + 0.05 \cdot t$) would prevent excessive process noise inflation during platform maneuvers.
+- **Change:** Set `kappa_max = 10.0` in `configs/params.json` and `src/params.h`.
+- **Budget cost:** +0 KB RSS, +0 ms/s
+- **Dev results (10 trials, seeds 1–2):**
+  - MH_01_easy: ATE 3.4153 m / 3.4174 m (0.0000 m delta vs baseline)
+  - V1_01_easy: ATE 1.7143 m / 1.7170 m (0.0000 m delta vs baseline)
+  - V2_02_medium: ATE 2.2570 m / 2.2635 m (0.0000 m delta vs baseline)
+  - room1: ATE 1.2650 m / 1.6627 m (0.0000 m delta vs baseline)
+  - room2: ATE 3.2891 m / 2.8082 m (0.0000 m delta vs baseline)
+- **Decision:** **REJECT** (Condition 1 failed; 0.0% delta across all metrics and sequences; `kappa` does not reach ceiling in normal flight).
+- **Notes:** Reverted to baseline defaults.
+
+---
