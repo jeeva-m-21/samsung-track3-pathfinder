@@ -413,3 +413,54 @@ Reason: Meets all 8 acceptance criteria. Improves Blind 5s RMSE by -7.83% (p < 0
 ```
 
 ---
+
+## EXP-E40: [Tier 4] Multi-Filter Perturbed Ensemble (3-Instance Median Fusion)
+
+- **Date / commit:** 2026-11-13 / `847db1a` (parent `best-006` `4200484`)
+- **Hypothesis:** Running 3 parallel deterministic ESKF instances with perturbed process noise and damping scalings ($[1.0\times, 1.0\times]$, $[0.75\times, 0.75\times]$, $[1.30\times, 1.30\times]$) and fusing poses via component-wise median (position) and average quaternion (attitude) will eliminate outlier trajectories and stabilize dead-reckoning drift.
+- **Change:**
+  - Added zero-heap streaming ensemble module `src/ensemble.h` implementing robust 3-way median and normalized quaternion averaging.
+  - Parameterized `run_eskf_full` in `src/pipeline.cpp` to maintain 3 parallel filter states (`NominalState states[3]`, `Mat15 Ps[3]`) without dynamic allocation.
+  - Added `enable_ensemble` flag in `configs/params.json` and `src/params.h` with `--disable-ensemble` CLI ablation toggle.
+  - Added unit test suite `tests/cpp/test_ensemble.cpp`.
+- **Budget cost:** +28 KB RSS (1,808 KB vs 1,780 KB), +1.67 ms/s compute (2.50 ms/s vs 0.83 ms/s, 3× compute penalty), 0 dynamic heap in filter loop, 1 thread.
+- **Dev results (50 paired runs: 5 dev sequences × seeds 1–10 vs `best-006`):**
+  - **Blind 5s RMSE (Target):** 4.7851 m -> 4.7581 m (**-0.26% relative**, delta: -0.0270 m). 95% paired bootstrap CI: `[-0.0657, +0.0011]` m (spans zero).
+  - **Dropout 2s Gap RMSE (Target):** 6.1991 m -> 6.1770 m (**-0.26% relative**, delta: -0.0221 m). 95% paired bootstrap CI: `[-0.0586, +0.0044]` m (spans zero).
+  - **Waypoint ATE RMSE:** 2.3093 m -> 2.3026 m (**-0.26% relative**, delta: -0.0067 m). 95% paired bootstrap CI: `[-0.0155, -0.0005]` m.
+  - **Attitude Error:** 74.74° -> 74.81° (**+0.16% relative**, delta: +0.08°).
+  - **Per-sequence Blind 5s deltas:**
+    - MH_01_easy: 4.518 m -> 4.518 m (-0.0%)
+    - V1_01_easy: 1.905 m -> 1.900 m (-0.3%)
+    - V2_02_medium: 3.738 m -> 3.732 m (-0.1%)
+    - room1: 3.384 m -> 3.375 (+0.2%)
+    - room2: 10.381 m -> 10.266 m (-1.1%)
+- **Physical Analysis:**
+  1. Once high-amplitude gyro spikes are eliminated by the E22 median front-end, all 3 filter instances produce nearly identical trajectories. The median fusion output differs from the nominal filter by only a few millimeters to centimeters.
+  2. The tiny -0.26% improvement is strictly inside the measurement noise floor and its 95% bootstrap CI spans zero for both primary leverage components (Blind 5s and Gap 2s).
+  3. Fusing 3 full filter instances triples runtime compute (from 0.83 ms/s to 2.50 ms/s), consuming 50% of the maximum 5.0 ms/s compute budget for no measurable statistical upside.
+- **Decision:** **REJECT** (Rule 1 failed: target gain -0.26% is far below the >= 5.0% threshold and within noise floor; 95% bootstrap CI spans zero while tripling compute).
+
+### Reviewer Checklist (Section 8 / 9)
+
+```
+Reviewer: Reviewer Agent (5db90c77-7a7f-4ddc-890d-0300523ac231)
+Date: 2026-11-13
+Reproduced from commit: 847db1a
+
+- [x] Hypothesis and physical reason recorded.
+- [x] Single change; diff is minimal (adds src/ensemble.h and 3-filter state array in pipeline).
+- [x] Baseline and new numbers reproduced from a clean checkout, same seeds (seeds 1–10).
+- [x] Noise floor reported; improvement exceeds 2× std (Failed: deltas of -0.0270m Blind and -0.0221m Gap are well inside noise floor).
+- [x] Raw-meter scorecard: blind, gap, attitude, per-sequence deltas included.
+- [x] No sequence regressed > 15% (worst sequence delta is room1 Blind at +0.2%).
+- [x] RSS and ms/s measured on release build with taskset -c 0 (Peak RSS: 1,808 KB, 2.50 ms/s).
+- [x] Tests, sanitizers, fuzz, format audit all pass (1,250 C++ unit checks, 215 pytest cases, ASan/UBSan clean, trajectory format valid).
+- [x] Ledger entry complete; decision follows the acceptance rule.
+- [x] No hard-coded per-dataset constants introduced.
+
+Decision: REJECT
+Reason: Violates Acceptance Rule 1 (target Blind 5s and Gap 2s improved by only -0.26% relative, failing the >= 5.0% threshold and well within the noise floor; 95% bootstrap CIs span zero; compute cost triples from 0.83 ms/s to 2.50 ms/s with no statistically significant gain).
+```
+
+---
