@@ -21,10 +21,10 @@
   "performance_metrics": {
     "objective_J": 0.1364,
     "improvement_vs_naive_pct": 89.50,
-    "ate_rmse_m": 3.6326,
+    "ate_rmse_m": 3.6309,
     "blind_5s_rmse_m": 5.7608,
     "dropout_rmse_m": 6.8851,
     "rpe_1s_rmse_m": 0.5288
   },
-  "commit": "3003a1c"
+  "commit": "0d5e736"
 }
