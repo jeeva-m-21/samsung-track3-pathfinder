@@ -173,3 +173,55 @@ Reason: Phase 1 Tasks 1–3 benchmark independently reproduced with identical me
 - **Notes:** Reverted to baseline defaults.
 
 ---
+
+## EXP-E01: [Tier 0] Anchor Reconciliation
+
+- **Date / commit:** 2026-11-13 / `cd76a0a` (parent `best-005` `7a8562f`)
+- **Hypothesis:** Reconcile and verify baseline anchors (commit `35c3334` vs `7a8562f`) across 50 full evaluation runs (seeds 1–10) and confirm harness alignment.
+- **Change:** Clean-room reproduction, alignment verification, and dataset discrepancy forensics.
+- **Budget cost:** +0 KB RSS, +0 ms/s
+- **Dev results (50 runs: 5 dev sequences × 10 seeds):**
+  - **`35c3334`:** ATE 5.787 m, Blind 5s 18.065 m, Gap 2s 15.654 m, Start-Anchored ATE 15.995 m
+  - **`best-005`:** ATE 2.409 m, Blind 5s 5.390 m, Gap 2s 6.625 m, Start-Anchored ATE 6.526 m
+  - **Relative gains:** ATE **-58.37%**, Blind 5s **-70.16%**, Gap 2s **-57.68%**
+- **Discrepancy Resolution:** TUM-VI room1 clean 18.1m vs 5.0m vs 1.40m explained by pedestrian velocity prior; V2_02 8.33m vs 2.27m explained by physical rotor drag and calibrated noise multipliers. Re-running `best-005` exactly reproduces `reports/NOISE_FLOOR.md` (0.00e+00 m delta).
+- **Decision:** N/A (Measurement/Reconciliation). Baseline anchor verified. See `reports/ANCHOR_RECONCILIATION.md`.
+
+---
+
+## EXP-E02: [Tier 0] Gap-Handling Mechanics & Failure Latch Discovery
+
+- **Date / commit:** 2026-11-13 / `e1d047ad` (parent `best-005` `7a8562f`)
+- **Hypothesis:** Analyze degrade.py around the 2s gap and trace pipeline behavior during and after signal loss.
+- **Change:** State and telemetry logging across gap boundaries.
+- **Budget cost:** +0 KB RSS, +0 ms/s
+- **Key Discoveries:**
+  1. At $t=25.0$s to $27.0$s (2.0s NaN dropout gap), $T_{\text{fail}} = 1.0$s is reached at $t=26.0$s.
+  2. The pipeline latches into failure (`is_failed_ = true`) and completely ceases processing all subsequent IMU samples for the remaining 115 seconds.
+  3. In EXP-002, unlatching blindly caused an $8.1\text{ m/s}^2$ horizontal phantom gravity projection runaway due to 35°–56° of unmodeled attitude tilt during blackout.
+- **Decision:** N/A (Diagnostic). Formulated concrete engineering specifications for E11 (Bidirectional Gap Bridge) and E12 (Re-anchored resume with tilt re-alignment).
+
+---
+
+## EXP-E00: [Tier 0] Theoretical Performance Ceilings & Oracle Matrix
+
+- **Date / commit:** 2026-11-13 / `c44f96e` (parent `best-005` `7a8562f`)
+- **Hypothesis:** Establish theoretical performance ceilings by injecting ground-truth oracles on degraded dev data across 10 conditions and 500 total evaluation runs.
+- **Change:** Implemented oracle evaluation harness `tools/eval_oracles.py`.
+- **Budget cost:** +0 KB RSS, +0 ms/s
+- **Dev results (10 conditions, seeds 1–10, 500 total runs):**
+  - **Baseline (`best-005`):** ATE 2.409 m, Blind 5s 5.390 m, Gap 2s 6.625 m
+  - **Oracle 1 (v at Cutoff):** ATE 2.462 m (+2.2%), Blind 5s 5.239 m (-4.31%), Gap 2s 6.667 m (+2.8%)
+  - **Oracle 2 (v Periodic Throughout):** ATE 2.241 m (-5.93%), Blind 5s 6.314 m (+36.3%), Gap 2s **2.912 m (-57.55%)**
+  - **Oracle 3 (Speed Mag Only):** ATE 2.736 m (+23.6%), Blind 5s 8.205 m (+103.1%)
+  - **Oracle 4 (Yaw Throughout):** ATE 2.617 m (+12.86%), Blind 5s 7.068 m (+47.7%)
+  - **Oracle 5 (Full Attitude Throughout):** ATE 3.066 m (+47.1%), Blind 5s 8.666 m (+168.8%)
+  - **Oracle 6 (Biases Throughout):** ATE 2.315 m (-4.5%), Blind 5s 4.771 m (-10.9%)
+  - **Oracle 7a (Attitude + v Periodic):** ATE 2.113 m (-8.14%), Gap 2s 2.405 m (-27.3%)
+- **Decision Gates:**
+  - Gate 1 (Velocity Prior): GT velocity at cutoff improves blind by only 4.31% (< 15%); GT velocity throughout improves ATE by only 5.93% (< 15%). **DECISION: SKIP whole-trajectory Tier 3 velocity priors for ATE.**
+  - Gate 2 (Yaw Prior): GT yaw throughout regresses ATE by +12.86%. **DECISION: SKIP Tier 3 yaw items.**
+  - Primary Bottleneck: Gap blackout integration (Gap error collapses by -57.5% when velocity is known across gaps).
+- **Decision:** N/A (Measurement / Ceilings). Decision gates applied. See `reports/CEILINGS.md`.
+
+---
