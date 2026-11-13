@@ -577,3 +577,55 @@ Reason: Violates Acceptance Rule 1 (target Blind 5s RMSE improved by only -3.33%
 ```
 
 ---
+
+## EXP-E41: [Tier 4] Fixed-Lag / RTS Backward Smoother on Velocity and Position
+
+- **Date / commit:** 2026-11-13 / `25c4951` (parent `b9eed87` / `best-007` / `release-candidate`)
+- **Hypothesis:** Forward ESKF accumulates uncompensated quadratic velocity/position drift between discrete constraints (ZUPTs, velocity bounds, and tilt updates). A fixed-lag or Rauch-Tung-Striebel (RTS) backward smoother propagating velocity corrections backwards in time will flatten pre-update drift humps and improve Waypoint ATE RMSE by $\ge 10\%$.
+- **Change:**
+  - Implemented checkpointed PV-RTS backward smoother (`apply_pv_rts_smoother`) in `src/pipeline.cpp` operating on a static circular trajectory buffer (`MAX_TRAJECTORY_SAMPLES = 36000`) with zero dynamic heap allocations.
+  - Added configuration flags `enable_rts_smoother` and `rts_tau` in `configs/params.json` and `src/params.h`.
+- **Budget cost:** +1,472 KB RSS (3,320 KB vs 1,848 KB, meets $\le 4.0$ MB budget limit), compute 0.76 ms/s (meets $\le 5.0$ ms/s target), 0 dynamic heap in filter loop, 1 thread.
+- **Dev results (50 paired runs: 5 dev sequences × seeds 1–10 vs `best-007`):**
+  - **Waypoint ATE RMSE (Target):** 2.1051 m -> 2.1051 m (**+0.00% relative**, delta: +0.0000 m). 95% paired bootstrap CI: `[-0.0348, +0.0362]` m (spans zero).
+  - **Blind 5s RMSE:** 3.7854 m -> 3.7832 m (**-0.06% relative**, delta: -0.0022 m). 95% paired bootstrap CI: `[-0.2489, +0.2480]` m (spans zero).
+  - **Dropout 2s Gap RMSE:** 5.0901 m -> 5.0807 m (**-0.19% relative**, delta: -0.0094 m). 95% paired bootstrap CI: `[-0.2096, +0.1994]` m (spans zero).
+  - **Attitude Error:** 75.9348° -> 75.9348° (**+0.00% relative**, unchanged).
+  - **Per-sequence Waypoint ATE deltas:**
+    - MH_01_easy: 3.4315 m -> 3.4315 m (+0.00%)
+    - V1_01_easy: 1.7169 m -> 1.7170 m (+0.00%)
+    - V2_02_medium: 2.0189 m -> 2.0189 m (+0.00%)
+    - room1: 1.2861 m -> 1.2861 m (+0.00%)
+    - room2: 2.0721 m -> 2.0721 m (+0.00%)
+- **Physical Analysis & Falsification:**
+  1. In visual-inertial SLAM or GNSS-aided navigation, backward smoothing is highly effective because exteroceptive landmarks or satellite pseudoranges provide absolute position constraints that retroactively tie down drift.
+  2. In pure IMU strapdown dead reckoning, there are **no spatial position landmarks**. The only discrete velocity updates with zero ground-truth error are Zero Velocity Updates (ZUPTs) when the sensor is completely stationary.
+  3. During active drone flight (EuRoC) and continuous pedestrian walking (TUM-VI), the vehicle never comes to a complete rest after initial launch; thus, zero stationary ZUPT updates occur during the trajectory ($innov \equiv 0$).
+  4. Attempting to back-propagate soft velocity bounding updates creates destructive shrinkage during high-speed banked turns (e.g., doubling `V2_02_medium` ATE from 2.01 m to 4.02 m). When restricted to true stationary ZUPTs, the RTS smoother operates cleanly but has zero physical innovations to back-propagate, yielding a mathematically null effect ($< 0.1\%$).
+- **Decision:** **REJECT** (Rule 1 failed: Waypoint ATE improved by +0.00%, failing the $\ge 5.0\%$ target gain requirement; all 95% bootstrap CIs span zero).
+
+### Reviewer Checklist (Section 8 / 9)
+
+```
+Reviewer: Reviewer Agent (5db90c77-7a7f-4ddc-890d-0300523ac231)
+Date: 2026-11-13
+Reproduced from commit: 25c4951
+
+- [x] Hypothesis and physical reason recorded.
+- [x] Single change; diff is minimal (zero-heap backward smoother in pipeline.cpp).
+- [x] Baseline and new numbers reproduced from a clean checkout, same seeds (seeds 1–10 match worker exactly).
+- [x] Noise floor reported; improvement exceeds 2× std (Failed: deltas are indistinguishable from zero).
+- [x] Raw-meter scorecard: blind, gap, attitude, per-sequence deltas included.
+- [x] No sequence regressed > 15% (no sequence regressed; all deltas <= 0.00%).
+- [x] RSS and ms/s measured on release build with taskset -c 0 (Peak RSS: 3,320 KB, 0.76 ms/s).
+- [x] Tests, sanitizers, fuzz, format audit all pass (1,246 C++ unit checks, 215 pytest cases, ASan/UBSan clean, format audit valid).
+- [x] Ledger entry complete; decision follows the acceptance rule.
+- [x] No hard-coded per-dataset constants introduced.
+
+Decision: REJECT
+Reason: Violates Acceptance Rule 1 (target Waypoint ATE improved by +0.00% relative, failing the mandatory >= 5.0% improvement threshold; 95% paired bootstrap CI [-0.0348, +0.0362] m spans zero; hypothesis is physically falsified due to absence of mid-flight stationary ZUPT events in pure IMU dead reckoning).
+```
+
+---
+
+---
