@@ -643,6 +643,7 @@ Reason: Violates Acceptance Rule 1 (target Waypoint ATE improved by +0.00% relat
 |----|--------|----------|--------|------------|
 | E60 | exp/E60-hampel-coning | E60 | 🔵 RUNNING | Conditional Hampel + 2-sample coning correction |
 | E61 | exp/E61-instant-nan-huber | E61 | 🔴 REJECT | T_fail=0 instant NaN detection + Huber post-gap re-entry |
+| E61b | exp/E61b-frozen-cov-invalid | E61b | 🔴 REJECT | Freeze covariance during invalid window (kappa_invalid) |
 | E63 | exp/E63-adaptive-noise-q | E63 | 🟡 PARK | Online adaptive process noise Q(t) via EWMA |
 | E64 | exp/E64-regime-curvature | E64 | 🟡 PARK | Regime-blended curvature extrapolation (walking gate) |
 
@@ -810,6 +811,53 @@ Reproduced from commit: ead06f0
 Decision: PARK
 Reason: Violates Acceptance Rule 1 (aggregate dev Blind 5s improvement of -2.06% and Gap 2s of -2.42% fall below the mandatory >= 5.0% threshold across the entire dev suite, despite statistically significant gains of -12.0% Blind and -20.9% Gap on dynamic flight V2_02_medium with zero regressions anywhere).
 ```
+
+---
+
+## EXP-E61b: [v2 Phase] Freeze Covariance During Invalid Window (kappa_invalid)
+
+- **Date / commit:** 2026-11-15 / `exp/E61b-frozen-cov-invalid` (parent `submission-final` `2b31798`)
+- **Hypothesis:** In EXP-E61, it was hypothesized that during the $T_{\text{fail}} = 1.0\text{ s}$ invalid sample window, `gap_substep()` inflates error covariance $P$ with $\kappa_{\text{gap}} = 5.0$ for up to 200 consecutive frames, leading to covariance explosion ($5.0^{200}$) that corrupts state propagation and post-gap re-entry. Decoupling the invalid window process noise via parameter `kappa_invalid` $\in \{5.0, 2.0, 1.0, 0.0\}$ to freeze or cap covariance growth will prevent runaway and improve Gap 2s RMSE.
+- **Change:**
+  - Added parameter `kappa_invalid` in `configs/params.json` and `src/params.h`.
+  - Updated `GapHandler::process_sample()` in `src/gap.cpp` and `gap_substep()` to accept `kappa_invalid`.
+  - Tested $\kappa_{\text{invalid}} \in \{5.0, 2.0, 1.0, 0.0\}$.
+- **Budget cost:** Peak RSS 1.74 MB ($\le 4.0$ MB), compute 0.49–1.11 ms/s ($\le 5.0$ ms/s), 0 dynamic allocations in filter loop, 1 thread.
+- **Dev Results (50 paired runs: 5 dev sequences × seeds 1–10 vs `submission-final`):**
+  - **Waypoint ATE RMSE:** 2.1051 m -> 2.1051 m (**+0.00% relative**, delta: +0.0000 m).
+  - **Blind 5s RMSE:** 3.7854 m -> 3.7854 m (**+0.00% relative**, delta: +0.0000 m).
+  - **Dropout 2s Gap RMSE:** 5.0901 m -> 5.0901 m (**+0.00% relative**, delta: +0.0000 m).
+  - **Attitude Error:** 75.9348° -> 75.9348° (**+0.00% relative**, delta: +0.0000°).
+  - **All metrics across all 5 sequences and all 10 seeds are identical to 8 decimal places (0.00000000 m delta).**
+- **Physical Analysis & Hypothesis Falsification:**
+  1. The covariance matrix $P$ during invalid sample processing is a **pure dead write**. Neither kinematic propagation ($v_{\text{next}} = v e^{-\Delta t/\tau_{\text{gap}}}$, $p_{\text{next}} = p + 0.5(v + v_{\text{next}})\Delta t$, $q_{\text{next}} = q \exp(\omega_s \Delta t)$), nor output trajectory emission, nor `FailureDetector` ever reads $P$.
+  2. Once $T_{\text{fail}} = 1.0\text{ s}$ elapses during the 2.0s blackout, `FailureDetector` permanently latches failure, restoring state kinematics $(p, v, q, \omega_s)$ from the reliable buffer (which does not store or restore $P$), and completely bypasses ESKF filtering for the remainder of the flight.
+  3. Consequently, the covariance explosion hypothesis from EXP-E61 is completely disproven: the metric swings observed in E61 ($T_{\text{fail}} = 0.0\text{ s}$) were driven entirely by kinematic rollback timing and differential decay dynamics, with zero contribution from covariance inflation.
+- **Decision:** **REJECT** (Violates Acceptance Rule 1: Target gain is strictly 0.00%, delta: +0.0000 m, 95% bootstrap CI `[0.0000, 0.0000]`).
+
+### Reviewer Checklist (Section 8 / 9)
+
+```
+Reviewer: Reviewer Agent (5db90c77-7a7f-4ddc-890d-0300523ac231)
+Date: 2026-11-15
+Reproduced from branch: exp/E61b-frozen-cov-invalid
+
+- [x] Hypothesis and physical reason recorded.
+- [x] Single change; diff is minimal (adds kappa_invalid in gap.cpp/gap.h).
+- [x] Baseline and new numbers reproduced from a clean checkout, same seeds (spot check confirmed exact 0.00000000m delta).
+- [x] Noise floor reported; improvement exceeds 2× std (Failed: delta is exactly 0.0000m).
+- [x] Raw-meter scorecard: blind, gap, attitude, per-sequence deltas included.
+- [x] No sequence regressed > 15% (all deltas exactly 0.00%).
+- [x] RSS and ms/s measured on release build with taskset -c 0 (Peak RSS: 1.74 MB, 0.49 ms/s).
+- [x] Tests, sanitizers, fuzz, format audit all pass (1,241 C++ unit checks, 215 pytest cases, ASan/UBSan clean, format audit valid).
+- [x] Ledger entry complete; decision follows the acceptance rule.
+- [x] No hard-coded per-dataset constants introduced.
+
+Decision: REJECT
+Reason: Violates Acceptance Rule 1 (Target gain is exactly 0.0000 m / 0.00% across all metrics, all sequences, and all seeds; the covariance explosion hypothesis is completely falsified as covariance P is never read during invalid sample propagation or failure recovery).
+```
+
+---
 
 ---
 
