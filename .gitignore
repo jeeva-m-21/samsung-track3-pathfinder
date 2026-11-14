@@ -1,5 +1,6 @@
 # Data & Datasets
 data/
+data
 *.bag
 *.tar.gz
 
@@ -29,3 +30,4 @@ scratch/
 docs/
 results/
 *.log
+.tmp_eval

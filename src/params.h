@@ -60,6 +60,9 @@ constexpr double tau_v = 3.0;
 constexpr double tau_omega = 1.5;
 constexpr double shrink_v = 0.9;
 constexpr double stationary_v_thresh = 0.05;
+constexpr bool enable_regime_curvature = true;
+constexpr double regime_curvature_min_w = 0.5;
+constexpr double tau_omega_blind = 1.5;
 constexpr bool enable_iir_filter = false;
 constexpr double iir_cutoff_hz = 14.0;
 constexpr bool enable_velocity_bounding = true;
@@ -91,6 +94,11 @@ constexpr bool spike_filter_acc = false;
 constexpr bool spike_filter_hampel = false;
 constexpr double spike_thresh_gyro = 0.3;
 constexpr double spike_thresh_acc = 4.0;
+constexpr bool enable_adaptive_q = true;
+constexpr bool adaptive_q_scale_acc = false;
+constexpr double adaptive_q_alpha = 0.005;
+constexpr double adaptive_q_min = 1.0;
+constexpr double adaptive_q_max = 25.0;
 
 } // namespace params
 

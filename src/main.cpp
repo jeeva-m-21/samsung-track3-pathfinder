@@ -19,6 +19,16 @@ int main(int argc, char* argv[]) {
             append_blind = true;
         } else if (std::strcmp(argv[i], "--disable-spike-filter") == 0) {
             options.disable_spike_filter = true;
+        } else if (std::strcmp(argv[i], "--enable-adaptive-q") == 0) {
+            options.enable_adaptive_q = true;
+        } else if (std::strcmp(argv[i], "--disable-adaptive-q") == 0) {
+            options.enable_adaptive_q = false;
+        } else if (std::strcmp(argv[i], "--adaptive-q-scale-acc") == 0) {
+            options.adaptive_q_scale_acc = true;
+        } else if (std::strncmp(argv[i], "--adaptive-q-max=", 17) == 0) {
+            options.adaptive_q_max = std::atof(argv[i] + 17);
+        } else if (std::strncmp(argv[i], "--adaptive-q-alpha=", 19) == 0) {
+            options.adaptive_q_alpha = std::atof(argv[i] + 19);
 #ifdef ENABLE_ORACLES
         } else if (std::strcmp(argv[i], "--telemetry") == 0) {
             if (i + 1 < argc) {
