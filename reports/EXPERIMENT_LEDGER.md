@@ -629,3 +629,84 @@ Reason: Violates Acceptance Rule 1 (target Waypoint ATE improved by +0.00% relat
 ---
 
 ---
+
+---
+
+## v2 Phase — Started 2026-11-15
+
+**v2-dev branch** created from `submission-final` (2b31798).
+**Sealed seeds {101–110} are SPENT.** All new R&D on dev seeds {1–10}. Final v2 validation on fresh {301–310}.
+
+### Worker assignments
+
+| ID | Branch | Worktree | Status | Hypothesis |
+|----|--------|----------|--------|------------|
+| E60 | exp/E60-hampel-coning | E60 | 🔵 RUNNING | Conditional Hampel + 2-sample coning correction |
+| E61 | exp/E61-instant-nan-huber | E61 | 🔵 RUNNING | T_fail=0 instant NaN detection + Huber post-gap re-entry |
+| E63 | exp/E63-adaptive-noise-q | E63 | 🔵 RUNNING | Online adaptive process noise Q(t) via EWMA |
+| E64 | exp/E64-regime-curvature | E64 | 🟡 PARK | Regime-blended curvature extrapolation (walking gate) |
+
+> NOTE: E62 (world-frame vz) CANCELLED — code review shows pedestrian prior already does world-frame vertical (H_v(1,2)=1.0 in updates.cpp). Would be a no-op.
+
+---
+
+## EXP-E64: [v2 Phase] Regime-Blended Curvature Extrapolation (Gated on Walking Confidence)
+
+- **Date / commit:** 2026-11-15 / `2a54a67` (parent `submission-final` `2b31798`)
+- **Hypothesis:** In EXP-E13, blind body-frame curvature extrapolation achieved substantial reductions on pedestrian sequences (`room1`: -10.78%, `room2`: -6.66%), but degraded agile drone flight (`V2_02_medium`: +4.90%) due to uncoordinated bank turns. A causal, zero-heap `WalkingDetector` evaluating high-frequency accelerometer vibration $\text{EMA}(\|\mathbf{a}_k - \mathbf{a}_{k-1}\|)$, velocity magnitude $\text{EMA}(\|\mathbf{v}\|)$, and step impact energy $\text{EMA}((\|\mathbf{a}_k\| - g)^2)$ will distinguish continuous flight ($w_{\text{walk}} \le 0.001$) from pedestrian walking ($w_{\text{walk}} = 1.0$). By gating curvature extrapolation ($w_{\text{walk}} \ge 0.5$), pedestrian accuracy gains can be unlocked while guaranteeing 0.00% collateral degradation on drone flights.
+- **Change:**
+  - Implemented zero-heap, stack-allocated `WalkingDetector` in `src/blind.h` and hooked into `src/pipeline.cpp`.
+  - Added configuration flags `enable_regime_curvature` and `regime_curvature_min_w` in `configs/params.json` and `src/params.h`.
+  - Added unit test in `tests/cpp/test_modules.cpp`.
+- **Budget cost:** Peak RSS 1.69 MB (1,808 KB release limit $\le 4.0$ MB), compute 0.80 ms/s ($\le 5.0$ ms/s), 0 dynamic heap in filter loop, 1 thread.
+- **Dev Results (50 paired runs: 5 dev sequences × seeds 1–10 vs `submission-final`):**
+  - **Blind 5s RMSE (Target):** 3.7854 m -> 3.6371 m (**-3.92% relative**, delta: -0.1483 m). 95% paired bootstrap CI: `[-0.2654, -0.0377]` m (strictly excludes zero).
+  - **Waypoint ATE RMSE:** 2.1051 m -> 2.0863 m (**-0.89% relative**, delta: -0.0188 m). 95% paired bootstrap CI: `[-0.0282, -0.0105]` m (strictly excludes zero).
+  - **Dropout 2s Gap RMSE:** 5.0901 m -> 5.0815 m (**-0.17% relative**, delta: -0.0087 m). 95% paired bootstrap CI: `[-0.0174, -0.0003]` m (excludes zero).
+  - **Attitude Error:** 75.9348° -> 75.9348° (**+0.00% relative**, unchanged).
+  - **Per-sequence Blind 5s deltas:**
+    - `MH_01_easy` (Drone MAV): 4.2437 m -> 4.2437 m (**+0.00%**, perfectly protected)
+    - `V1_01_easy` (Drone MAV): 1.9426 m -> 1.9426 m (**+0.00%**, perfectly protected)
+    - `V2_02_medium` (Drone MAV): 3.2436 m -> 3.2436 m (**+0.00%**, eliminated E13 +4.90% overshoot)
+    - `room1` (Pedestrian): 2.6350 m -> 2.3505 m (**-10.80%**, delta: -0.2845 m)
+    - `room2` (Pedestrian): 6.8620 m -> 6.4052 m (**-6.66%**, delta: -0.4568 m)
+  - **Pedestrian-Only Blind 5s (room1 + room2):** 4.7485 m -> 4.3779 m (**-7.81% relative**, delta: -0.3706 m). 95% paired bootstrap CI: `[-0.6273, -0.1004]` m.
+  - **Drone-Only Blind 5s (MH_01 + V1_01 + V2_02):** 3.1433 m -> 3.1433 m (**+0.00%**, delta: +0.0000 m).
+- **Reviewer Confirmation Run (50 paired runs: seeds 201–210 vs `submission-final`):**
+  - **Blind 5s RMSE:** 4.1340 m -> 3.8701 m (**-6.38% relative**, delta: -0.2639 m, 95% CI: `[-0.4206, -0.1066]` m). Preserves effect sign; effect size is 162% relative / 178% absolute of dev set.
+  - **Waypoint ATE RMSE:** 2.1580 m -> 2.1319 m (**-1.21% relative**, delta: -0.0261 m, 95% CI: `[-0.0403, -0.0133]` m).
+  - **Gap 2s RMSE:** 5.3424 m -> 5.3244 m (**-0.34% relative**, delta: -0.0180 m, 95% CI: `[-0.0301, -0.0066]` m).
+  - **Pedestrian-Only Blind 5s on Confirmation Seeds:** 5.5089 m -> 4.8492 m (**-11.98% relative**, delta: -0.6597 m, 95% CI: `[-0.9555, -0.3210]` m).
+  - **Drone-Only Blind 5s on Confirmation Seeds:** 3.2174 m -> 3.2174 m (**+0.00%** across all 3 drone sequences).
+- **Physical Analysis & Noise Floor:**
+  1. The regime detection gating is 100% decisive across all 100 runs (50 dev + 50 confirmation): $w_{\text{walk}} \le 0.001$ on all drone flights and $w_{\text{walk}} = 1.000$ on all pedestrian runs.
+  2. The pedestrian walking gain is large, statistically significant, and verified on confirmation seeds (-7.81% dev, -11.98% confirmation, both 95% CIs bounded away from zero).
+  3. However, across the combined 5-sequence benchmark, the mean relative Blind 5s gain on dev seeds is **-3.92%**, which falls below the mandatory **$\ge 5.0\%$ target gain threshold** of Acceptance Rule 1.
+  4. Per-sequence raw gains (-0.2845 m on room1 and -0.4568 m on room2) do not exceed the un-paired cross-seed baseline noise floor std (2× std = 2.112 m on room1, 7.504 m on room2 in `NOISE_FLOOR.md`).
+- **Decision:** **PARK** (Acceptance Rule 1 failure: suite-wide mean relative gain of -3.92% falls below the $\ge 5.0\%$ threshold. Highly viable for stacking/combination with orthogonal front-end filters like E60/E61).
+
+### Reviewer Checklist (Section 8 / 9)
+
+```
+Reviewer: Reviewer Agent (5db90c77-7a7f-4ddc-890d-0300523ac231)
+Date: 2026-11-15
+Reproduced from commit: 2a54a67
+
+- [x] Hypothesis and physical reason recorded.
+- [x] Single change; diff is minimal (WalkingDetector in blind.h, regime curvature blend).
+- [x] Baseline and new numbers reproduced from a clean checkout, same seeds (dev seeds 1–10 match worker exactly).
+- [x] Noise floor reported; improvement exceeds 2× std (Failed: aggregate -3.92% is below 5.0% threshold; per-sequence room1/room2 gains fall inside un-paired cross-seed std).
+- [x] Raw-meter scorecard: blind, gap, attitude, per-sequence deltas included.
+- [x] No sequence regressed > 15% (all drone sequences exactly +0.00%; no regression anywhere).
+- [x] RSS and ms/s measured on release build with taskset -c 0 (Peak RSS: 1,808 KB, 0.80–0.87 ms/s).
+- [x] Tests, sanitizers, fuzz, format audit all pass (1,246 C++ unit checks, 215 pytest cases, ASan/UBSan clean, format audit valid).
+- [x] Confirmation run on seeds 201–210 holds sign and >= half the effect (Blind -6.38% overall, -11.98% pedestrian; both 95% CIs exclude zero).
+- [x] Ledger entry complete; decision follows the acceptance rule.
+- [x] No hard-coded per-dataset constants introduced.
+
+Decision: PARK
+Reason: Violates Acceptance Rule 1 (aggregate dev Blind 5s improvement of -3.92% falls below the mandatory >= 5.0% threshold, despite statistically significant pedestrian gains of -7.81% dev / -11.98% confirmation with zero collateral regression on flight sequences).
+```
+
+---
+
