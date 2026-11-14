@@ -323,6 +323,45 @@ static void test_failure_detector_rollback() {
     TEST_ASSERT(detector.frozen_state().t_ns <= last_valid_t, "Rolled-back state must be pre-failure");
 }
 
+static void test_walking_detector() {
+    WalkingDetector det;
+    TEST_ASSERT_NEAR(det.get_w_walk(), 0.0, 1e-9, "Initial w_walk is 0");
+
+    // Simulate high vibration (drone flight)
+    Vec3 vel_drone = make_vec3(3.0, 1.0, 0.0);
+    for (int i = 0; i < 100; ++i) {
+        double jitter = (i % 2 == 0) ? 2.5 : -2.5;
+        Vec3 acc = make_vec3(0.0, 0.0, -9.80665 + jitter);
+        det.update(acc, vel_drone, 0.005);
+    }
+    TEST_ASSERT(det.get_w_walk() < 0.2, "Drone flight vibration and speed gives w_walk < 0.2");
+
+    // Simulate human walking (low vibration, ~1 m/s speed, periodic step energy)
+    WalkingDetector ped_det;
+    Vec3 vel_ped = make_vec3(1.1, 0.0, 0.0);
+    for (int i = 0; i < 150; ++i) {
+        // Step cadence ~ 2 Hz: acceleration oscillation around 1g
+        double step_osc = 2.0 * std::sin(2.0 * 3.14159 * i * 0.005 * 2.0);
+        Vec3 acc = make_vec3(0.1, 0.0, -9.80665 + step_osc);
+        ped_det.update(acc, vel_ped, 0.005);
+    }
+    TEST_ASSERT(ped_det.get_w_walk() > 0.5, "Pedestrian walking gives w_walk > 0.5");
+
+    // Blind position with w_walk = 0.0 should return straight line
+    Vec3 p_f = make_vec3(0.0, 0.0, 0.0);
+    Vec3 v_f = make_vec3(1.0, 0.0, 0.0);
+    Quat q_f = Quat::identity();
+    Vec3 omega_f = make_vec3(0.0, 0.0, 0.5); // 0.5 rad/s yaw rate
+    Vec3 p_straight = predict_blind_position(p_f, v_f, 2.0);
+    Vec3 p_gated_off = predict_blind_position(p_f, v_f, q_f, omega_f, 2.0,
+                                             params::tau_v, params::shrink_v,
+                                             params::tau_omega_blind,
+                                             params::stationary_v_thresh,
+                                             0.0); // w_walk = 0.0
+    TEST_ASSERT_NEAR(p_gated_off.data[0], p_straight.data[0], 1e-9, "Gated off curvature matches straight x");
+    TEST_ASSERT_NEAR(p_gated_off.data[1], p_straight.data[1], 1e-9, "Gated off curvature matches straight y");
+}
+
 int main() {
     std::printf("Running WP-33 module unit tests...\n");
 
@@ -334,6 +373,7 @@ int main() {
     test_gap_substepping_decay();
     test_blind_extrapolation_math();
     test_failure_detector_rollback();
+    test_walking_detector();
 
     std::printf("Tests run: %d, Tests failed: %d\n", g_tests_run, g_tests_failed);
     if (g_tests_failed > 0) {

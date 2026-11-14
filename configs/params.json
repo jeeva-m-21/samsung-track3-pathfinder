@@ -52,6 +52,9 @@
   "tau_omega": 1.5,
   "shrink_v": 0.9,
   "stationary_v_thresh": 0.05,
+  "enable_regime_curvature": true,
+  "regime_curvature_min_w": 0.5,
+  "tau_omega_blind": 1.5,
   "enable_iir_filter": false,
   "iir_cutoff_hz": 14.0,
   "enable_velocity_bounding": true,
@@ -82,5 +85,10 @@
   "spike_filter_acc": false,
   "spike_filter_hampel": false,
   "spike_thresh_gyro": 0.3,
-  "spike_thresh_acc": 4.0
+  "spike_thresh_acc": 4.0,
+  "enable_adaptive_q": true,
+  "adaptive_q_scale_acc": false,
+  "adaptive_q_alpha": 0.005,
+  "adaptive_q_min": 1.0,
+  "adaptive_q_max": 25.0
 }

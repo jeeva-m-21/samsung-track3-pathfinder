@@ -1,5 +1,6 @@
 #include "pipeline.h"
 #include "spike.h"
+#include "noise_est.h"
 #include <algorithm>
 #include <cmath>
 #include <cinttypes>
@@ -121,7 +122,11 @@ struct TrajectoryCollector {
         double qx, qy, qz, qw;
     };
 
-    TrajectoryCollector() : tmp_file(std::tmpfile()), count(0), active(true) {}
+    TrajectoryCollector() : tmp_file(std::tmpfile()), count(0), active(true) {
+        if (!tmp_file) {
+            tmp_file = std::fopen("/var/tmp/traj_collector.bin", "w+b");
+        }
+    }
     ~TrajectoryCollector() {
         if (tmp_file) {
             std::fclose(tmp_file);
@@ -1237,7 +1242,12 @@ int run_eskf_full(const char* input_path,
     Initializer initializer;
     GapHandler gap_handler;
     DegradationMonitor monitor;
+    AdaptiveQEstimator estimator_q;
+    estimator_q.alpha = options.adaptive_q_alpha;
+    estimator_q.min_mult = options.adaptive_q_min;
+    estimator_q.max_mult = options.adaptive_q_max;
     FailureDetector blind_predictor;
+    WalkingDetector walk_det;
     StationaryBuffer stat_buf;
     Butterworth2LowPass tilt_filter;
     DelayedOutputBuffer delay_buf;
@@ -1296,7 +1306,8 @@ int run_eskf_full(const char* input_path,
             state = step_res.state;
             P = step_res.P;
             was_in_gap = true;
-            bool failed = blind_predictor.update(t_curr, false, state.p, state.v, state.q, gap_handler.omega_s());
+            double w_walk = walk_det.get_w_walk();
+            bool failed = blind_predictor.update(t_curr, false, state.p, state.v, state.q, gap_handler.omega_s(), w_walk);
             Vec3 p_out = state.p;
             Quat q_out = state.q;
             if (failed || blind_predictor.is_failed()) {
@@ -1343,7 +1354,21 @@ int run_eskf_full(const char* input_path,
 #endif
         state = strapdown_step_midpoint(state, omega_curr, acc_curr, dt, g_w, cur_tau_ou);
         Mat15 F = build_f_matrix(state, omega_curr, acc_curr, dt, cur_tau_ou);
-        Mat15 Q = build_q_matrix(dt, q_gyro_mult, q_acc_mult,
+
+        double cur_q_gyro_mult = q_gyro_mult;
+        double cur_q_acc_mult = q_acc_mult;
+        if (options.enable_adaptive_q) {
+            if (was_in_gap) {
+                estimator_q.reset_window();
+            }
+            estimator_q.update(omega_curr, acc_curr);
+            cur_q_gyro_mult *= estimator_q.get_gyro_mult();
+            if (options.adaptive_q_scale_acc) {
+                cur_q_acc_mult *= estimator_q.get_acc_mult();
+            }
+        }
+
+        Mat15 Q = build_q_matrix(dt, cur_q_gyro_mult, cur_q_acc_mult,
                                  params::walk_mult_bg, params::walk_mult_ba, monitor.kappa());
         P = propagate_covariance(P, F, Q);
 
@@ -1456,7 +1481,9 @@ int run_eskf_full(const char* input_path,
             was_in_gap = false;
         }
 
-        blind_predictor.update(t_curr, true, state.p, state.v, state.q, gap_handler.omega_s());
+        walk_det.update(acc_curr, state.v, dt);
+        double w_walk = walk_det.get_w_walk();
+        blind_predictor.update(t_curr, true, state.p, state.v, state.q, gap_handler.omega_s(), w_walk);
         delay_buf.push(t_curr, state.p, state.q, false, collector);
     };
 
@@ -1611,6 +1638,7 @@ int run_eskf_full(const char* input_path,
         initializer.reset();
         gap_handler.reset();
         monitor.reset();
+        estimator_q.reset();
         blind_predictor.reset();
         stat_buf.clear();
         tilt_filter = Butterworth2LowPass();
