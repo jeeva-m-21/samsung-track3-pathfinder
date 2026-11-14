@@ -641,7 +641,7 @@ Reason: Violates Acceptance Rule 1 (target Waypoint ATE improved by +0.00% relat
 
 | ID | Branch | Worktree | Status | Hypothesis |
 |----|--------|----------|--------|------------|
-| E60 | exp/E60-hampel-coning | E60 | 🔵 RUNNING | Conditional Hampel + 2-sample coning correction |
+| E60 | exp/E60-hampel-coning | E60 | 🔴 REJECT | Conditional Hampel + 2-sample coning correction |
 | E61 | exp/E61-instant-nan-huber | E61 | 🔴 REJECT | T_fail=0 instant NaN detection + Huber post-gap re-entry |
 | E61b | exp/E61b-frozen-cov-invalid | E61b | 🔴 REJECT | Freeze covariance during invalid window (kappa_invalid) |
 | E63 | exp/E63-adaptive-noise-q | E63 | 🟡 PARK | Online adaptive process noise Q(t) via EWMA |
@@ -856,6 +856,63 @@ Reproduced from branch: exp/E61b-frozen-cov-invalid
 Decision: REJECT
 Reason: Violates Acceptance Rule 1 (Target gain is exactly 0.0000 m / 0.00% across all metrics, all sequences, and all seeds; the covariance explosion hypothesis is completely falsified as covariance P is never read during invalid sample propagation or failure recovery).
 ```
+
+---
+
+## EXP-E60: [v2 Phase] Conditional Hampel Spike Filter + 2-Sample Coning Correction
+
+- **Date / commit:** 2026-11-15 / `56cddca` (parent `submission-final` `2b31798`)
+- **Hypothesis:** 
+  1. The unconditional 3-tap median spike filter from E22 imposes a 1-sample (5 ms) phase lag on clean angular velocity, leaking gravity into horizontal acceleration during high-rate turns. Replacing it with a conditional Hampel filter (`spike_filter_hampel=true`) will preserve clean dynamic phase.
+  2. Incorporating the classical 2-sample Savage (1998) coning correction $\Delta\boldsymbol{\theta}_{\text{coning}} = \frac{1}{12}(\Delta\boldsymbol{\theta}_{k-1} \times \Delta\boldsymbol{\theta}_k)$ will reduce non-commutativity integration errors during simultaneous multi-axis rotations.
+- **Change:**
+  - Implemented 2-sample coning correction in `strapdown_step_coning()` and `strapdown_step_midpoint()` in `src/eskf.cpp` and `src/eskf.h`.
+  - Added configuration toggle `enable_coning_sculling` in `configs/params.json` and `src/params.h`.
+  - Evaluated grid of 10 configurations across Hampel thresholds {0.3, 0.5, 0.7, 1.0} rad/s and coning on/off across all 50 dev set runs (500 evaluations total).
+- **Budget cost:** Peak RSS 1.74–1.78 MB ($\le 4.0$ MB), compute 0.76–0.83 ms/s ($\le 5.0$ ms/s), 0 dynamic allocations in filter loop, 1 thread.
+- **Dev Results (50 paired runs: 5 dev sequences × seeds 1–10 vs `submission-final`):**
+  - **Coning Only (`coning_only`):**
+    - Waypoint ATE RMSE: 2.1051 m -> 2.1051 m (**+0.00% relative**, delta: +0.0000 m).
+    - Blind 5s RMSE: 3.7854 m -> 3.7854 m (**+0.00% relative**, delta: +0.0000 m).
+    - Gap 2s RMSE: 5.0901 m -> 5.0902 m (**+0.00% relative**, delta: +0.0001 m).
+    - Max delta across all sequences and seeds: $\Delta \le 0.0002$ m (mathematically null effect).
+  - **Conditional Hampel (`hampel_only_0.5`):**
+    - Suite-wide Blind 5s RMSE: 3.7854 m -> 4.3266 m (**+14.30% regression** ❌).
+    - Suite-wide Gap 2s RMSE: 5.0901 m -> 5.4629 m (**+7.32% regression** ❌).
+    - Suite-wide Waypoint ATE RMSE: 2.1051 m -> 2.1953 m (**+4.28% regression** ❌).
+  - **Catastrophic Per-Sequence Breach on `V2_02_medium` (`hampel_only_0.5`):**
+    - Blind 5s RMSE: 3.2436 m -> 4.8734 m (**+50.52% regression** ❌ > 15% limit).
+    - Gap 2s RMSE: 2.9473 m -> 3.6735 m (**+25.01% regression** ❌ > 15% limit).
+    - Waypoint ATE RMSE: 2.0189 m -> 2.2001 m (**+8.98% regression** ❌).
+- **Physical Analysis & Falsification:**
+  1. **The Unconditional Median Filter is an Essential Vibration Attenuator:** On propeller-driven multirotors (`V2_02_medium`), high-frequency motor and propeller vibration generates alternating angular rate oscillations below the outlier threshold (< 0.5 rad/s). The unconditional 3-tap median acts as a non-linear low-amplitude impulse filter that attenuates this rattling without the phase lag of a linear IIR filter. When Hampel is enabled, vibrations below threshold pass through unfiltered into the strapdown orientation integrator, corrupting attitude and triggering severe velocity runaway (+50.52% Blind 5s error).
+  2. **Coning Correction Swallowed by MEMS Sensor Noise:** At 200 Hz ($\Delta t = 5$ ms), the second-order 2-sample coning term is $\le 2.4 \times 10^{-5}$ rad even under aggressive turns. Over a 100s flight, this integrates to $< 0.05^\circ$, which is two orders of magnitude smaller than consumer MEMS gyro white noise and bias walk ($\sim 2^\circ$). The coning correction is physically swallowed by sensor noise, producing a negligible $\Delta \le 0.0001$ m.
+- **Decision:** **REJECT** (Rule 1 failed: coning has 0.00% gain, Hampel has 0.00% gain; Rule 2 failed: collateral loss across all scored components; Rule 3 failed: `V2_02_medium` Blind 5s degrades by +50.52% and Gap 2s degrades by +25.01%, breaching the $\le 15\%$ maximum per-sequence regression limit).
+
+### Reviewer Checklist (Section 8 / 9)
+
+```
+Reviewer: Reviewer Agent (5db90c77-7a7f-4ddc-890d-0300523ac231)
+Date: 2026-11-15
+Reproduced from commit: 56cddca
+
+- [x] Hypothesis and physical reason recorded.
+- [x] Single change; diff is minimal (adds coning in eskf.cpp/eskf.h and Hampel evaluation).
+- [x] Baseline and new numbers reproduced from a clean checkout, same seeds (confirmed across 50-run matrix).
+- [x] Noise floor reported; improvement exceeds 2× std (Failed: coning produces 0.0000m delta; Hampel produces severe regressions).
+- [x] Raw-meter scorecard: blind, gap, attitude, per-sequence deltas included.
+- [ ] No sequence regressed > 15% (FAILED: V2_02 Blind 5s degrades by +50.52% and Gap 2s degrades by +25.01%, far exceeding the 15% limit).
+- [x] RSS and ms/s measured on release build with taskset -c 0 (Peak RSS: 1.78 MB, 0.76 ms/s).
+- [x] Tests, sanitizers, fuzz, format audit all pass (1,246 C++ unit checks, 215 pytest cases, ASan/UBSan clean, format audit valid).
+- [x] Confirmation run on seeds 201–210: Skipped per protocol (severe Rule 3 breach).
+- [x] Ledger entry complete; decision follows the acceptance rule.
+- [x] No hard-coded per-dataset constants introduced.
+
+Decision: REJECT
+Reason: Violates Acceptance Rules 1, 2, and 3 (coning correction has zero measurable effect at 200 Hz on MEMS gyros; conditional Hampel filter allows high-frequency motor vibration below threshold to leak into orientation integration, causing catastrophic +50.52% Blind 5s regression on V2_02_medium, far exceeding the 15% sequence limit).
+```
+
+---
 
 ---
 
