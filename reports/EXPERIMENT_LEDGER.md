@@ -642,7 +642,7 @@ Reason: Violates Acceptance Rule 1 (target Waypoint ATE improved by +0.00% relat
 | ID | Branch | Worktree | Status | Hypothesis |
 |----|--------|----------|--------|------------|
 | E60 | exp/E60-hampel-coning | E60 | 🔵 RUNNING | Conditional Hampel + 2-sample coning correction |
-| E61 | exp/E61-instant-nan-huber | E61 | 🔵 RUNNING | T_fail=0 instant NaN detection + Huber post-gap re-entry |
+| E61 | exp/E61-instant-nan-huber | E61 | 🔴 REJECT | T_fail=0 instant NaN detection + Huber post-gap re-entry |
 | E63 | exp/E63-adaptive-noise-q | E63 | 🔵 RUNNING | Online adaptive process noise Q(t) via EWMA |
 | E64 | exp/E64-regime-curvature | E64 | 🟡 PARK | Regime-blended curvature extrapolation (walking gate) |
 
@@ -707,6 +707,58 @@ Reproduced from commit: 2a54a67
 Decision: PARK
 Reason: Violates Acceptance Rule 1 (aggregate dev Blind 5s improvement of -3.92% falls below the mandatory >= 5.0% threshold, despite statistically significant pedestrian gains of -7.81% dev / -11.98% confirmation with zero collateral regression on flight sequences).
 ```
+
+---
+
+## EXP-E61: [v2 Phase] Instant NaN Detection (T_fail → 0) + Huber Post-Gap Re-entry
+
+- **Date / commit:** 2026-11-15 / `eddfac8` (parent `submission-final` `2b31798`)
+- **Hypothesis:** In the baseline, a 1.0s delay (`T_fail = 1.0 s`) before declaring sensor failure forces the estimator to run `gap_substep` with process noise inflation $\kappa_{gap} = 5.0$ for up to 200 consecutive frames, leading to covariance runaway ($5.0^{200}$) and severe trajectory drift upon re-entry. Setting `T_fail = 0.0 s` to instantly latch failure on the first invalid sample, coupled with Huber measurement noise scaling on post-gap recovery (`post_gap_huber_alpha = 5.0`), will prevent covariance blowup and eliminate blackout spikes.
+- **Change:**
+  - Set `T_fail = 0.0 s` in `configs/params.json` and `src/params.h`.
+  - Added `post_gap_huber_alpha = 5.0` and `post_gap_huber_frames = 50` parameter flags.
+  - Updated `GapHandler` in `src/gap.cpp` / `src/gap.h` to apply linear ramp Huber noise scaling to measurement updates across `post_gap_huber_frames`.
+  - Scaled rotor drag and pedestrian prior measurement covariances by post-gap recovery multiplier $\sqrt{r_{\text{scale}}}$ in `src/pipeline.cpp`.
+- **Budget cost:** Peak RSS 1.96 MB (meets $\le 4.0$ MB limit), compute 1.22 ms/s ($\le 5.0$ ms/s), 0 dynamic allocations in filter loop, 1 thread.
+- **Dev Results (50 paired runs: 5 dev sequences × seeds 1–10 vs `submission-final`):**
+  - **Gap 2s RMSE:** 5.0901 m -> 3.2244 m (**-36.65% relative**, delta: -1.8657 m). 95% paired bootstrap CI: `[-2.5323, -1.2154]` m.
+  - **Blind 5s RMSE:** 3.7854 m -> 2.4038 m (**-36.50% relative**, delta: -1.3816 m). 95% paired bootstrap CI: `[-2.0425, -0.7188]` m.
+  - **Waypoint ATE RMSE:** 2.1051 m -> 2.0115 m (**-4.44% relative**, delta: -0.0936 m). 95% paired bootstrap CI: `[-0.2109, +0.0133]` m.
+  - **Attitude Error:** 75.9348° -> 70.9164° (**-6.61% relative**, delta: -5.0184°).
+  - **Severe Per-Sequence Regressions (Rule 3 Violations):**
+    - `V2_02_medium` Blind 5s RMSE: 3.2436 m -> 4.4713 m (**+37.85% regression** ❌ > 15% limit; verified on seed 1 at +42.10%)
+    - `V1_01_easy` Gap 2s RMSE: 1.8083 m -> 2.4744 m (**+36.84% regression** ❌ > 15% limit; verified on seed 1 at +30.21%)
+    - `room1` Blind 5s RMSE: 2.6350 m -> 3.4474 m (**+30.83% regression** ❌ > 15% limit)
+- **Physical Root Cause:**
+  1. `FailureDetector` operates as a sticky latch: once failure is triggered, it permanently switches into decaying dead-reckoning extrapolation and never re-latches back into open-loop propagation.
+  2. While instant latching prevents covariance runaway on sequences with permanent sensor loss (`MH_01_easy`, `room2`), it triggers prematurely on brief transient drops or noisy frames in agile sequences (`V1_01_easy`, `V2_02_medium`, `room1`).
+  3. Locking into decaying extrapolation prematurely starves the filter of valid motion dynamics during subsequent recoveries, severely regressing performance by over +30% to +38% on those sequences.
+- **Decision:** **REJECT** (Violates Acceptance Rule 3: Per-sequence guard strictly breached by `V2_02_medium` Blind 5s at +37.85%, `V1_01_easy` Gap 2s at +36.84%, and `room1` Blind 5s at +30.83%, all exceeding the $\le 15\%$ maximum regression limit).
+
+### Reviewer Checklist (Section 8 / 9)
+
+```
+Reviewer: Reviewer Agent (5db90c77-7a7f-4ddc-890d-0300523ac231)
+Date: 2026-11-15
+Reproduced from commit: eddfac8
+
+- [x] Hypothesis and physical reason recorded.
+- [x] Single change; diff is minimal (T_fail=0 and post-gap Huber scaling).
+- [x] Baseline and new numbers reproduced from a clean checkout, same seeds (dev seeds 1–10 spot-check confirmed).
+- [x] Noise floor reported; improvement exceeds 2× std (Global delta of -1.86m Gap and -1.38m Blind exceeds noise, but masked by regressions).
+- [x] Raw-meter scorecard: blind, gap, attitude, per-sequence deltas included.
+- [ ] No sequence regressed > 15% (FAILED: V2_02 Blind +37.85%, V1_01 Gap +36.84%, room1 Blind +30.83% all breach the 15% guard limit).
+- [x] RSS and ms/s measured on release build with taskset -c 0 (Peak RSS: 1,780 KB, 0.82 ms/s).
+- [x] Tests, sanitizers, fuzz, format audit all pass (all C++ tests pass, ASan/UBSan clean, trajectory format valid).
+- [x] Confirmation run on seeds 201–210: Skipped per protocol (Rule 3 violation is decisive; confirmation seeds conserved).
+- [x] Ledger entry complete; decision follows the acceptance rule.
+- [x] No hard-coded per-dataset constants introduced.
+
+Decision: REJECT
+Reason: Violates Acceptance Rule 3 (Per-sequence guard: three sequences worsen by > 30%, far exceeding the 15% maximum sequence regression limit: V2_02_medium Blind 5s +37.85%, V1_01_easy Gap 2s +36.84%, and room1 Blind 5s +30.83%. Setting T_fail=0 causes premature sticky latching on transient invalid frames).
+```
+
+---
 
 ---
 
