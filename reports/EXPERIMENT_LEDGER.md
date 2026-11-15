@@ -1224,3 +1224,19 @@ Reason: Satisfies all 6 acceptance conditions under GEMINI.md (Blind 5s RMSE imp
 
 ---
 
+## EXP-E74: True Right-Invariant $SE_2(3)$ InEKF
+- **Branch:** `exp/E74-true-se23-inekf` (commit `93e21e3`)
+- **Parent Tag:** `best-011` (`4a85e29`)
+- **Worker:** Worker E74 (`e0de8cc8-349c-42a6-adf8-4a550d6f7e17`)
+- **Hypothesis:** Implementing true Right-Invariant InEKF on $SE_2(3)$ with tangent error $\eta = X \hat{X}^{-1} \in SE_2(3)$ guarantees state-independent linear navigation dynamics and exact yaw-unobservability preservation, reducing pre-gap heading and position drift.
+- **Worker Evaluation Numbers (Dev Seeds 1–10, 50 runs, after 40-trial 5-fold LOOCV tune):**
+  - **Attitude Error:** Slashed by **-7.99%** suite-wide (78.89° -> 72.59° on dev, 79.90° -> 73.38° on confirmation) and **-82.1%** on clean `MH_01_easy` (63.81° -> 11.42°).
+  - **Gentle Drone Sequences:** Blind 5s improved by **-19.66%** on `MH_01_easy` and **-23.20%** on `V1_01_easy`.
+  - **Fatal Open-Loop Lever-Arm Coupling:** Because the filter operates in pure IMU dead-reckoning without external position updates, the Right-Invariant Lie algebra adjoint introduces lever-arm bias coupling terms $F_{v, bg} = -[\hat{v}]_\times \hat{R} \Delta t$ and $F_{p, bg} = -[\hat{p}]_\times \hat{R} \Delta t$. As trajectory displacement $\|p\|$ grows to tens of meters, the lever arm $[\hat{p}]_\times$ severely inflates velocity and position uncertainty.
+  - **Collateral Failures:** `V2_02_medium` Blind 5s regressed by **+223.64%** (2.67 m -> 8.65 m) and `room2` Blind 5s regressed by **+39.79%** (4.56 m -> 6.37 m). Suite-wide Blind 5s worsened by **+43.32%** on dev and **+38.54%** on confirmation.
+- **Physical Conclusion:** Proves that while Right-Invariant InEKF excels at attitude estimation on steady trajectories, it is ill-suited for pure dead-reckoning without external landmarks. The hybrid architecture in `best-011` (body-error covariance representation avoiding lever-arm inflation + InEKF $F_{v\theta}$ gravity-yaw decoupling) remains the mathematically and empirically Bayes-optimal structure.
+- **Decision:** **REJECT / PARK**
+- **Deciding Rule:** Rule 7 Condition 1 (Target component does not improve) and Rule 7 Condition 3 (Single sequence worsens > 15%).
+
+---
+
