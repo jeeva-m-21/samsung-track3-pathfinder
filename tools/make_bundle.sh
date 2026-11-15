@@ -55,7 +55,7 @@ rm -f "${BUNDLE_ZIP}"
 # ├── metadata.json (and optional CollegeName_TeamName.json)
 # └── src/
 cp -f metadata.json "${TEAM_NAME}.json" 2>/dev/null || true
-zip -r "${BUNDLE_ZIP}" estimated_trajectory.txt metadata.json "${TEAM_NAME}.json" src/ \
+zip -r "${BUNDLE_ZIP}" estimated_trajectory.txt metadata.json "${TEAM_NAME}.json" Dockerfile README.md src/ \
     -x "src/build/*" -x "src/cpp/build/*" -x "src/main" -x "*.pyc" -x "*/__pycache__/*" > /dev/null
 
 echo "      Bundle created successfully: ${BUNDLE_ZIP} ($(du -h "${BUNDLE_ZIP}" | cut -f1))"
