@@ -148,3 +148,40 @@ A paramount scientific question at Phase 5 is whether the filter gains achieved 
 - [x] **Independent C++ Unit Tests:** 457 Math checks, 480 ESKF checks, 304 Module checks, and 5 Spike filter test suites pass (100% pass rate).
 - [x] **Python Pytest Suite:** All 215 tests pass clean.
 - [x] **Deterministic Python Entry Point:** `src/main.py` verified byte-for-byte identical output with `./main`.
+
+---
+
+## 6. Version 2.0 Release Candidate Evaluation on Fresh Untouched Seeds {401..410}
+
+**Date:** 2026-11-15  
+**Candidate Tag:** `best-011` / `submission-v2`  
+**Git Commit Hash:** `48b84c2`  
+**Seeds Tested:** `{401, 402, 403, 404, 405, 406, 407, 408, 409, 410}` (Never-seen, fresh split)  
+**Total Runs:** 50 runs across all 5 competition sequences + UZH-FPV stress test  
+
+### 6.1 Scorecard Comparison Across Splits
+
+| Metric | Dev `{1..10}` | Confirmation `{201..210}` | Sealed `{101..110}` (v1.0) | **Fresh `{401..410}` (v2.0)** | Relative Gain vs Initial Baseline |
+|:---|:---:|:---:|:---:|:---:|:---:|
+| **Waypoint ATE RMSE (SE(3))** | 2.006 m | 2.063 m | 2.132 m | **2.020 m** (median: 1.726 m) | **-65.1%** (-3.767 m) ✅ |
+| **Final 5s Blind RMSE** | 3.061 m | 3.339 m | 3.934 m | **3.076 m** (median: 2.696 m) | **-83.0%** (-14.989 m) ✅ |
+| **Dropout 2s Gap RMSE** | 4.652 m | 4.952 m | 5.153 m | **4.710 m** (median: 2.981 m) | **-69.9%** (-10.944 m) ✅ |
+| **Attitude Error** | 78.89° | 79.90° | 77.20° | **79.42°** | Consistent across splits ✅ |
+
+### 6.2 Per-Sequence Breakdown (Fresh Seeds 401–410)
+
+| Sequence | Domain / Dynamics | ATE RMSE Mean (m) | Blind 5s Mean (m) | Gap 2s Mean (m) |
+|:---|:---|:---:|:---:|:---:|
+| **`MH_01_easy`** | EuRoC MAV Industrial Hall | 3.454 m | 3.968 m | 12.049 m |
+| **`V1_01_easy`** | EuRoC MAV Room (Gentle) | 1.726 m | 1.754 m | 1.763 m |
+| **`V2_02_medium`** | EuRoC MAV Room (Agile) | 1.941 m | 2.636 m | 2.625 m |
+| **`room1`** | TUM-VI Handheld Walking | 1.284 m | 2.598 m | 3.222 m |
+| **`room2`** | TUM-VI Handheld Walking | 1.694 m | 4.426 m | 3.892 m |
+| **Overall Mean** | **All 5 Sequences** | **2.020 m** | **3.076 m** | **4.710 m** |
+| **Overall Median** | **All 5 Sequences** | **1.726 m** | **2.696 m** | **2.981 m** |
+
+### 6.3 Degraded UZH-FPV High-Speed Stress Test
+- **Dataset:** `data/uzh_fpv/imu_indoor_forward_7.csv` degraded with seed 401 under `configs/degrade_default.json`
+- **Output:** Valid TUM trajectory format confirmed, zero NaNs, zero crashes
+- **Start-Anchored ATE:** 22.696 m (matches expected open-loop high-speed flight error bound)
+
