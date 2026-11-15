@@ -982,3 +982,68 @@ Reason: Satisfies all 6 acceptance conditions under GEMINI.md (Blind 5s RMSE imp
 
 ---
 
+## EXP-E69: [v2 Phase] Initialization Hardening, Zero-Phase Spike Filter, and Safe Replay
+
+- **Date / commit:** 2026-11-15 / `3694def` (parent `best-008` / `c7cd88a`)
+- **Hypothesis:** 
+  1. Safe Replay State Reset: During the initial 1-second stationary/moving calibration buffer replay, causal modules (`estimator_q`, `walk_det`, `monitor`) accumulated state over un-initialized or shifting baseline estimates. Resetting them prior to replaying the buffer from nominal filter start ensures zero warm-up artifact contamination.
+  2. Initialization Hardening: Near 180° initial gravity tilts, the quaternion calculation lacked orthogonal axis projection, and motion-detected initialization could latch non-physical gravity magnitudes. Setting standard Earth gravity ($9.80665\text{ m/s}^2$) on motion start stabilizes initial velocity propagation.
+  3. Consecutive Spike & Conditional Accel Spike Filter: High-rate synthetic spikes in the degradation model can span 2 consecutive samples or isolate large single-sample accelerometer spikes. Adding consecutive-sample spike detection and isolated accel spike replacement preserves clean kinematic phase while rejecting synthetic impulse errors.
+- **Change:**
+  - `src/init.cpp`: Orthogonal axis projection for 180° tilt quaternion math, standard gravity latch $9.80665\text{ m/s}^2$ on motion initialization.
+  - `src/pipeline.cpp`: Explicit reset of `estimator_q`, `walk_det`, and `monitor` before replaying the initial sample ring buffer.
+  - `src/spike.h`: Consecutive spike detection on gyro; isolated 1-sample accel spike replacement with midpoint and consecutive accel spike guard.
+  - `configs/params.json` & `src/params.h`: Added toggles `enable_init_hardening` and `enable_spike_hardening`.
+- **Budget cost:** Peak RSS 1.77 MB ($\le 4.0$ MB limit), compute latency 0.26 s for 182 s IMU ($\approx 1.4$ ms/s, well within $\le 5.0$ ms/s target) measured with `taskset -c 0` on release binary. 0 dynamic allocations in filter loop, 1 thread.
+- **Dev Results (50 paired runs: 5 dev sequences × seeds 1–10 vs `best-008`):**
+  - **Blind 5s RMSE:** 3.5591 m -> 3.3938 m (**-4.65% relative**, delta: -0.1653 m). 95% paired bootstrap CI: `[-0.3537, -0.0285]` m. Exceeds 2× noise-floor std ($\approx 0.03$ m), but **fails the mandatory $\ge 5.0\%$ target component gain threshold** under Rule 1.
+  - **Waypoint ATE RMSE:** 2.0711 m -> 2.0662 m (**-0.24% relative**, delta: -0.0049 m). 95% paired bootstrap CI: `[-0.0318, +0.0108]` m (spans zero).
+  - **Dropout 2s Gap RMSE:** 4.9585 m -> 4.7872 m (**-3.45% relative**, delta: -0.1713 m). 95% paired bootstrap CI: `[-0.3639, -0.0376]` m.
+  - **Attitude Error:** 76.1788° -> 76.0949° (**-0.11% relative**, delta: -0.0839°).
+  - **Per-Sequence Breakdown (Dev Set):**
+    - `MH_01_easy`: 4.2437 m -> 3.8678 m (**-8.86%**)
+    - `V1_01_easy`: 1.9426 m -> 1.8376 m (**-5.41%**; Note: Gap 2s regresses by **+5.98%**)
+    - `V2_02_medium`: 2.8535 m -> 2.9705 m (**+4.10% regression**)
+    - `room1`: 2.3505 m -> 2.2974 m (**-2.26%**)
+    - `room2`: 6.4052 m -> 5.9957 m (**-6.39%**)
+- **Confirmation Results (50 paired runs: 5 dev sequences × confirmation seeds 201–210):**
+  - **Blind 5s RMSE:** 3.7605 m -> 3.4888 m (**-7.23% relative**, delta: -0.2717 m). 95% paired bootstrap CI: `[-0.4448, -0.1181]` m.
+  - **Waypoint ATE RMSE:** 2.1160 m -> 2.1018 m (**-0.67% relative**, delta: -0.0141 m).
+  - **Dropout 2s Gap RMSE:** 5.2235 m -> 5.0411 m (**-3.49% relative**, delta: -0.1823 m).
+  - **Per-Sequence Breakdown (Confirmation Set):**
+    - `MH_01_easy`: 4.2512 m -> 3.9408 m (**-7.30%**)
+    - `V1_01_easy`: 1.9911 m -> 1.8307 m (**-8.06%**)
+    - `V2_02_medium`: 2.8618 m -> 2.7954 m (**-2.32%**)
+    - `room1`: 3.1886 m -> 2.5098 m (**-21.29%**)
+    - `room2`: 6.5097 m -> 6.3672 m (**-2.19%**)
+- **Integrity Failure:**
+  - `make test` fails with an assertion crash in `test_spike`:
+    `test_spike: tests/cpp/test_spike.cpp:124: void test_spike_suppression(): Assertion 'std::abs(out_samples[5].ax - 5.5) < 1e-6' failed. Aborted (core dumped)`.
+    Enabling `enable_spike_hardening=true` modifies accelerometer spike behavior by filtering isolated spikes even when `spike_filter_acc=false`, breaking the existing unit test assertion contract without updating tests.
+- **Decision:** **REJECT** (Rule 1 violation: Dev set target Blind 5s improvement of -4.65% is below the mandatory $\ge 5.0\%$ relative improvement threshold; Rule 5 violation: `make test` fails due to unit test assertion crash in `test_spike`).
+
+### Reviewer Checklist (Section 8 / 9)
+
+```
+Reviewer: Reviewer Agent (5db90c77-7a7f-4ddc-890d-0300523ac231)
+Date: 2026-11-15
+Reproduced from commit: 3694def4d7500443ce4a73150b1090524d84f0b6
+
+- [x] Hypothesis and physical reason recorded.
+- [ ] Single change; diff is minimal (bundles three distinct changes: init tilt/gravity, replay resets, and accel/gyro spike filtering).
+- [x] Baseline and new numbers reproduced from a clean checkout, same seeds (dev seeds 1–10 and confirmation seeds 201–210 reproduced independently).
+- [ ] Noise floor reported; improvement exceeds 2× std (FAILED: aggregate dev Blind 5s improvement is -4.65%, which does not reach the mandatory >= 5.0% relative improvement threshold).
+- [x] Raw-meter scorecard: blind, gap, attitude, per-sequence deltas included.
+- [x] No sequence regressed > 15% (worst per-sequence delta on dev Blind 5s is +4.10% on V2_02_medium, Gap regressed +5.98% on V1_01_easy).
+- [x] RSS and ms/s measured on release build with taskset -c 0 (Peak RSS: 1.77 MB <= 4.0 MB, Compute: 1.4 ms/s <= 5.0 ms/s).
+- [ ] Tests, sanitizers, fuzz, format audit all pass (FAILED: make test fails with assertion failure in test_spike at line 124).
+- [x] Confirmation run on seeds 201–210: Sign preserved (negative), effect size -7.23%.
+- [x] Ledger entry complete; decision follows the acceptance rule.
+- [x] No hard-coded per-dataset constants introduced.
+
+Decision: REJECT
+Reason: Violates Acceptance Rule 1 (dev set Blind 5s improvement of -4.65% is strictly below the mandatory >= 5.0% threshold) and Acceptance Rule 5 (integrity check fails: make test crashes on test_spike assertion failure at line 124).
+```
+
+---
+
