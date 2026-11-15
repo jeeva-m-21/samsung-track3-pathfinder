@@ -1,5 +1,6 @@
 #include "pipeline.h"
 #include "spike.h"
+#include "noise_est.h"
 #include <algorithm>
 #include <cmath>
 #include <cinttypes>
@@ -121,7 +122,11 @@ struct TrajectoryCollector {
         double qx, qy, qz, qw;
     };
 
-    TrajectoryCollector() : tmp_file(std::tmpfile()), count(0), active(true) {}
+    TrajectoryCollector() : tmp_file(std::tmpfile()), count(0), active(true) {
+        if (!tmp_file) {
+            tmp_file = std::fopen("/var/tmp/traj_collector.bin", "w+b");
+        }
+    }
     ~TrajectoryCollector() {
         if (tmp_file) {
             std::fclose(tmp_file);
@@ -1237,7 +1242,12 @@ int run_eskf_full(const char* input_path,
     Initializer initializer;
     GapHandler gap_handler;
     DegradationMonitor monitor;
+    AdaptiveQEstimator estimator_q;
+    estimator_q.alpha = options.adaptive_q_alpha;
+    estimator_q.min_mult = options.adaptive_q_min;
+    estimator_q.max_mult = options.adaptive_q_max;
     FailureDetector blind_predictor;
+    WalkingDetector walk_det;
     StationaryBuffer stat_buf;
     Butterworth2LowPass tilt_filter;
     DelayedOutputBuffer delay_buf;
@@ -1264,6 +1274,7 @@ int run_eskf_full(const char* input_path,
     double dt_nom = 0.005;
     size_t stream_count = 0;
     double vibe_ema = 0.0;
+    double gyro_ema = 0.0;
     double ped_energy = 0.0;
     double dyn_acc_ema = 0.0;
     Vec3 prev_acc_raw = math::make_vec3(0.0, 0.0, 0.0);
@@ -1296,7 +1307,8 @@ int run_eskf_full(const char* input_path,
             state = step_res.state;
             P = step_res.P;
             was_in_gap = true;
-            bool failed = blind_predictor.update(t_curr, false, state.p, state.v, state.q, gap_handler.omega_s());
+            double w_walk = walk_det.get_w_walk();
+            bool failed = blind_predictor.update(t_curr, false, state.p, state.v, state.q, gap_handler.omega_s(), w_walk);
             Vec3 p_out = state.p;
             Quat q_out = state.q;
             if (failed || blind_predictor.is_failed()) {
@@ -1336,18 +1348,42 @@ int run_eskf_full(const char* input_path,
         if (dynamic_envelope > 15.0) dynamic_envelope = 15.0;
         double max_v = is_flight ? dynamic_envelope : (is_pedestrian ? params::ped_max_velocity_mps : dynamic_envelope);
 
+        double t_sec = static_cast<double>(t_curr - t0_ns) * 1e-9;
+
+        double cur_q_gyro_mult = q_gyro_mult;
+        double cur_q_acc_mult = q_acc_mult;
+        if (options.enable_adaptive_q) {
+            if (was_in_gap) {
+                estimator_q.reset_window();
+            }
+            estimator_q.update(omega_curr, acc_curr, t_sec);
+            cur_q_gyro_mult *= estimator_q.get_gyro_mult();
+            if (options.adaptive_q_scale_acc) {
+                cur_q_acc_mult *= estimator_q.get_acc_mult();
+            }
+        }
+
 #ifdef ENABLE_ORACLES
         double cur_tau_ou = options.disable_tau_ou ? 0.0 : params::tau_ou;
 #else
         double cur_tau_ou = params::tau_ou;
 #endif
+        gyro_ema = (1.0 - 0.02) * gyro_ema + 0.02 * omega_curr.norm();
+
+        if (options.enable_unbiased_adaptive_q && options.enable_adaptive_q) {
+            double rho = estimator_q.get_noise_excess_ratio();
+            bool is_calm_flight = is_flight && (gyro_ema < 0.40);
+            if (is_calm_flight) {
+                cur_tau_ou = params::tau_ou / std::clamp(rho, 1.0, 2.5);
+            }
+        }
+
         state = strapdown_step_midpoint(state, omega_curr, acc_curr, dt, g_w, cur_tau_ou);
         Mat15 F = build_f_matrix(state, omega_curr, acc_curr, dt, cur_tau_ou);
-        Mat15 Q = build_q_matrix(dt, q_gyro_mult, q_acc_mult,
+
+        Mat15 Q = build_q_matrix(dt, cur_q_gyro_mult, cur_q_acc_mult,
                                  params::walk_mult_bg, params::walk_mult_ba, monitor.kappa());
         P = propagate_covariance(P, F, Q);
-
-        double t_sec = static_cast<double>(t_curr - t0_ns) * 1e-9;
         Vec3 acc_filt = params::enable_iir_filter ? tilt_filter.step(acc_curr) : acc_curr;
 
         stat_buf.add_sample(t_sec, omega_curr, acc_curr, state.b_g);
@@ -1360,7 +1396,7 @@ int run_eskf_full(const char* input_path,
         if (step_res.apply_updates) {
 #ifdef ENABLE_ORACLES
             if (!options.disable_tilt) {
-                tilt_applied = apply_tilt_update(state, P, acc_filt, omega_curr, monitor.quality(), g_w, 1e9, step_res.r_scale);
+                tilt_applied = apply_tilt_update(state, P, acc_filt, omega_curr, monitor.quality(), g_w, 1e9, step_res.r_scale, monitor.kappa());
             }
             if (is_stat && !options.disable_zupt) {
                 apply_zupt_update(state, P, 1e9, step_res.r_scale);
@@ -1373,7 +1409,7 @@ int run_eskf_full(const char* input_path,
                 vel_bounded = apply_velocity_bounding(state, P, max_v);
             }
 #else
-            tilt_applied = apply_tilt_update(state, P, acc_filt, omega_curr, monitor.quality(), g_w, 1e9, step_res.r_scale);
+            tilt_applied = apply_tilt_update(state, P, acc_filt, omega_curr, monitor.quality(), g_w, 1e9, step_res.r_scale, monitor.kappa());
             if (is_stat) {
                 apply_zupt_update(state, P, 1e9, step_res.r_scale);
             } else if (is_flight && params::enable_rotor_drag) {
@@ -1456,7 +1492,9 @@ int run_eskf_full(const char* input_path,
             was_in_gap = false;
         }
 
-        blind_predictor.update(t_curr, true, state.p, state.v, state.q, gap_handler.omega_s());
+        walk_det.update(acc_curr, state.v, dt);
+        double w_walk = walk_det.get_w_walk();
+        blind_predictor.update(t_curr, true, state.p, state.v, state.q, gap_handler.omega_s(), w_walk);
         delay_buf.push(t_curr, state.p, state.q, false, collector);
     };
 
@@ -1527,6 +1565,12 @@ int run_eskf_full(const char* input_path,
                         P(9 + i, 9 + i) = 1e-6;
                         P(12 + i, 12 + i) = 1e-4;
                     }
+                }
+
+                if (params::enable_init_hardening) {
+                    estimator_q.reset();
+                    walk_det.reset();
+                    monitor.reset();
                 }
 
                 for (size_t idx = 0; idx < init_count; ++idx) {
@@ -1611,6 +1655,7 @@ int run_eskf_full(const char* input_path,
         initializer.reset();
         gap_handler.reset();
         monitor.reset();
+        estimator_q.reset();
         blind_predictor.reset();
         stat_buf.clear();
         tilt_filter = Butterworth2LowPass();
@@ -1623,6 +1668,7 @@ int run_eskf_full(const char* input_path,
         P = Mat15::identity();
         t0_ns = 0;
         prev_t_ns = 0;
+        gyro_ema = 0.0;
         continue;
     }
 

@@ -83,6 +83,10 @@ struct Quat {
         return R;
     }
 
+    inline Mat3 to_rotation_matrix() const {
+        return to_rot_mat();
+    }
+
     // Rotate vector: R(q) * v
     inline Vec3 rotate(const Vec3& v) const {
         return to_rot_mat() * v;

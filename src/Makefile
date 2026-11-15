@@ -7,7 +7,7 @@ TARGET := $(BUILD_DIR)/main
 
 SRCS := main.cpp io.cpp init.cpp eskf.cpp updates.cpp monitor.cpp gap.cpp blind.cpp pipeline.cpp
 OBJS := $(patsubst %.cpp,$(BUILD_DIR)/%.o,$(SRCS))
-DEPS := io.h params.h mat.h quat.h init.h eskf.h updates.h monitor.h gap.h blind.h pipeline.h spike.h
+DEPS := io.h params.h mat.h quat.h init.h eskf.h updates.h monitor.h gap.h blind.h pipeline.h spike.h noise_est.h
 
 REPO_ROOT := $(abspath ..)
 TEST_MATH_SRC := $(REPO_ROOT)/tests/cpp/test_math.cpp
@@ -21,6 +21,9 @@ TEST_MODULES_TARGET := $(BUILD_DIR)/test_modules
 
 TEST_SPIKE_SRC := $(REPO_ROOT)/tests/cpp/test_spike.cpp
 TEST_SPIKE_TARGET := $(BUILD_DIR)/test_spike
+
+TEST_NOISE_EST_SRC := $(REPO_ROOT)/tests/cpp/test_noise_est.cpp
+TEST_NOISE_EST_TARGET := $(BUILD_DIR)/test_noise_est
 
 MODULE_OBJS := $(BUILD_DIR)/init.o $(BUILD_DIR)/eskf.o $(BUILD_DIR)/updates.o $(BUILD_DIR)/monitor.o $(BUILD_DIR)/gap.o $(BUILD_DIR)/blind.o
 
@@ -41,11 +44,15 @@ $(BUILD_DIR)/%.o: %.cpp $(DEPS) | $(BUILD_DIR)
 $(BUILD_DIR):
 	mkdir -p $(BUILD_DIR)
 
-test: $(TEST_MATH_TARGET) $(TEST_ESKF_TARGET) $(TEST_MODULES_TARGET) $(TEST_SPIKE_TARGET)
+test: $(TEST_MATH_TARGET) $(TEST_ESKF_TARGET) $(TEST_MODULES_TARGET) $(TEST_SPIKE_TARGET) $(TEST_NOISE_EST_TARGET)
 	./$(TEST_MATH_TARGET)
 	./$(TEST_ESKF_TARGET)
 	./$(TEST_MODULES_TARGET)
 	./$(TEST_SPIKE_TARGET)
+	./$(TEST_NOISE_EST_TARGET)
+
+$(TEST_NOISE_EST_TARGET): $(TEST_NOISE_EST_SRC) noise_est.h mat.h params.h | $(BUILD_DIR)
+	$(CXX) $(CXXFLAGS) -I. -I$(REPO_ROOT) -o $@ $< $(LDFLAGS)
 
 $(TEST_SPIKE_TARGET): $(TEST_SPIKE_SRC) spike.h io.h params.h | $(BUILD_DIR)
 	$(CXX) $(CXXFLAGS) -I. -I$(REPO_ROOT) -o $@ $< $(LDFLAGS)

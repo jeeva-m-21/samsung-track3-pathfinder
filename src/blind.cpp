@@ -24,6 +24,82 @@ Vec3 predict_blind_position(const Vec3& p_f,
     return p_f + delta_p;
 }
 
+Vec3 predict_blind_position(const Vec3& p_f,
+                            const Vec3& v_f,
+                            const Quat& q_f,
+                            const Vec3& omega_f,
+                            double tau,
+                            double tau_v,
+                            double shrink_v,
+                            double tau_omega,
+                            double stationary_v_thresh,
+                            double w_walk) {
+    if (tau <= 0.0) {
+        return p_f;
+    }
+    if (v_f.norm() < stationary_v_thresh) {
+        return p_f;
+    }
+
+    Vec3 p_straight = predict_blind_position(p_f, v_f, tau, tau_v, shrink_v, stationary_v_thresh);
+
+    if (!params::enable_regime_curvature) {
+        return p_straight;
+    }
+
+    double w_curve = 0.0;
+    if (params::regime_curvature_min_w <= 0.0) {
+        w_curve = 1.0;
+    } else if (w_walk >= params::regime_curvature_min_w) {
+        w_curve = w_walk;
+    }
+
+    if (w_curve <= 0.0) {
+        return p_straight;
+    }
+
+    double t = (tau > 5.0) ? 5.0 : tau;
+    if (t < 1e-9) {
+        return p_f;
+    }
+
+    double tau_v_val = (tau_v < 1e-6) ? 1e-6 : tau_v;
+    double tau_w_val = (tau_omega < 1e-6) ? 1e-6 : tau_omega;
+
+    // Body frame velocity at cutoff: v_b0 = R_f^T * v_f
+    Mat3 R_f = q_f.to_rot_mat();
+    Vec3 v_b0 = R_f.transpose() * v_f;
+
+    // Numerical integration of v_w(s) using Simpson's rule with N = 50 subintervals (zero dynamic heap allocation)
+    constexpr int N = 50;
+    double dt = t / static_cast<double>(N);
+
+    auto calc_vw = [&](double s) -> Vec3 {
+        double decay_v = shrink_v * std::exp(-s / tau_v_val);
+        double decay_rot = 1.0 - std::exp(-s / tau_w_val);
+        Vec3 rot_vec = omega_f * (tau_w_val * decay_rot);
+        Quat delta_q = math::exp_map(rot_vec);
+        Quat q_s = (q_f * delta_q).normalized();
+        math::ensure_continuity(q_s, q_f);
+        return q_s.to_rot_mat() * (v_b0 * decay_v);
+    };
+
+    Vec3 sum_v = calc_vw(0.0) + calc_vw(t);
+    for (int i = 1; i < N; ++i) {
+        double s = i * dt;
+        double weight = (i % 2 == 1) ? 4.0 : 2.0;
+        sum_v += calc_vw(s) * weight;
+    }
+
+    Vec3 delta_p = sum_v * (dt / 3.0);
+    Vec3 p_curved = p_f + delta_p;
+
+    if (w_curve >= 1.0) {
+        return p_curved;
+    }
+    return p_straight * (1.0 - w_curve) + p_curved * w_curve;
+}
+
 Quat predict_blind_orientation(const Quat& q_f,
                                const Vec3& omega_f,
                                double tau,
@@ -64,15 +140,79 @@ Vec3 predict_blind_velocity(const Vec3& v_f,
     return v_f * (shrink_v * std::exp(-tau / tau_v_val));
 }
 
+Vec3 predict_blind_velocity(const Vec3& v_f,
+                            const Quat& q_f,
+                            const Vec3& omega_f,
+                            double tau,
+                            double tau_v,
+                            double shrink_v,
+                            double tau_omega,
+                            double stationary_v_thresh,
+                            double w_walk) {
+    if (tau < 0.0) {
+        tau = 0.0;
+    }
+    if (tau >= 5.0 || v_f.norm() < stationary_v_thresh) {
+        return math::make_vec3(0.0, 0.0, 0.0);
+    }
+    Vec3 v_straight = predict_blind_velocity(v_f, tau, tau_v, shrink_v, stationary_v_thresh);
+
+    if (!params::enable_regime_curvature) {
+        return v_straight;
+    }
+
+    double w_curve = 0.0;
+    if (params::regime_curvature_min_w <= 0.0) {
+        w_curve = 1.0;
+    } else if (w_walk >= params::regime_curvature_min_w) {
+        w_curve = w_walk;
+    }
+
+    if (w_curve <= 0.0) {
+        return v_straight;
+    }
+
+    double tau_v_val = (tau_v < 1e-6) ? 1e-6 : tau_v;
+    double tau_w_val = (tau_omega < 1e-6) ? 1e-6 : tau_omega;
+
+    Mat3 R_f = q_f.to_rot_mat();
+    Vec3 v_b0 = R_f.transpose() * v_f;
+
+    double decay_v = shrink_v * std::exp(-tau / tau_v_val);
+    double decay_rot = 1.0 - std::exp(-tau / tau_w_val);
+    Vec3 rot_vec = omega_f * (tau_w_val * decay_rot);
+    Quat delta_q = math::exp_map(rot_vec);
+    Quat q_tau = (q_f * delta_q).normalized();
+    math::ensure_continuity(q_tau, q_f);
+
+    Vec3 v_curved = q_tau.to_rot_mat() * (v_b0 * decay_v);
+
+    if (w_curve >= 1.0) {
+        return v_curved;
+    }
+    return v_straight * (1.0 - w_curve) + v_curved * w_curve;
+}
+
 void predict_blind_pose(const Vec3& p_f,
                         const Vec3& v_f,
                         const Quat& q_f,
                         const Vec3& omega_f,
                         double tau,
                         Vec3& out_p,
-                        Quat& out_q) {
-    out_p = predict_blind_position(p_f, v_f, tau);
-    out_q = predict_blind_orientation(q_f, omega_f, tau);
+                        Quat& out_q,
+                        double w_walk) {
+    if (params::enable_regime_curvature) {
+        out_p = predict_blind_position(p_f, v_f, q_f, omega_f, tau,
+                                       params::tau_v, params::shrink_v,
+                                       params::tau_omega_blind,
+                                       params::stationary_v_thresh,
+                                       w_walk);
+    } else {
+        out_p = predict_blind_position(p_f, v_f, tau,
+                                       params::tau_v, params::shrink_v,
+                                       params::stationary_v_thresh);
+    }
+    out_q = predict_blind_orientation(q_f, omega_f, tau, params::tau_omega_blind);
 }
 
 // ---------------------------------------------------------------------------
@@ -80,7 +220,7 @@ void predict_blind_pose(const Vec3& p_f,
 // ---------------------------------------------------------------------------
 
 ReliableRingBuffer::ReliableRingBuffer()
-    : t_ns_{}, p_{}, v_{}, q_{}, omega_s_{}, head_(0), count_(0) {}
+    : t_ns_{}, p_{}, v_{}, q_{}, omega_s_{}, w_walk_{}, head_(0), count_(0) {}
 
 void ReliableRingBuffer::clear() {
     head_ = 0;
@@ -91,12 +231,14 @@ void ReliableRingBuffer::push(int64_t t_ns,
                               const Vec3& p,
                               const Vec3& v,
                               const Quat& q,
-                              const Vec3& omega_s) {
+                              const Vec3& omega_s,
+                              double w_walk) {
     t_ns_[head_] = t_ns;
     p_[head_] = p;
     v_[head_] = v;
     q_[head_] = q;
     omega_s_[head_] = omega_s;
+    w_walk_[head_] = w_walk;
 
     head_ = (head_ + 1) % CAPACITY;
     if (count_ < CAPACITY) {
@@ -129,6 +271,7 @@ bool ReliableRingBuffer::get_at_index(size_t ring_idx, ReliableSnapshot& out) co
     out.v = v_[ring_idx];
     out.q = q_[ring_idx];
     out.omega_s = omega_s_[ring_idx];
+    out.w_walk = w_walk_[ring_idx];
     return true;
 }
 
@@ -138,7 +281,8 @@ ReliableSnapshot rollback_to_reliable(const ReliableRingBuffer& ring_buffer, int
         math::make_vec3(0.0, 0.0, 0.0),
         math::make_vec3(0.0, 0.0, 0.0),
         Quat::identity(),
-        math::make_vec3(0.0, 0.0, 0.0)
+        math::make_vec3(0.0, 0.0, 0.0),
+        0.0
     };
 
     if (ring_buffer.empty()) {
@@ -171,12 +315,13 @@ ReliableSnapshot rollback_to_reliable(const ReliableRingBuffer& ring_buffer, int
     ReliableSnapshot latest_snap;
     ring_buffer.get_at_index(latest_idx, latest_snap);
 
-    // Improvement 3: Average velocity and angular velocity over the last 1.0s window of healthy flight
+    // Average velocity, angular velocity, and w_walk over the last 1.0s window of healthy flight/walk
     int64_t window_ns = 1000000000LL;
     int64_t t_min_ns = latest_snap.t_ns - window_ns;
 
     Vec3 sum_v = math::make_vec3(0.0, 0.0, 0.0);
     Vec3 sum_w = math::make_vec3(0.0, 0.0, 0.0);
+    double sum_w_walk = 0.0;
     size_t n_samples = 0;
 
     for (size_t i = 0; i < count; ++i) {
@@ -192,6 +337,7 @@ ReliableSnapshot rollback_to_reliable(const ReliableRingBuffer& ring_buffer, int
         if (ring_buffer.get_at_index(idx, snap)) {
             sum_v += snap.v;
             sum_w += snap.omega_s;
+            sum_w_walk += snap.w_walk;
             n_samples++;
         }
     }
@@ -200,6 +346,7 @@ ReliableSnapshot rollback_to_reliable(const ReliableRingBuffer& ring_buffer, int
         double inv_n = 1.0 / static_cast<double>(n_samples);
         latest_snap.v = sum_v * inv_n;
         latest_snap.omega_s = sum_w * inv_n;
+        latest_snap.w_walk = sum_w_walk * inv_n;
     }
 
     return latest_snap;
@@ -224,7 +371,8 @@ void FailureDetector::reset() {
         math::make_vec3(0.0, 0.0, 0.0),
         math::make_vec3(0.0, 0.0, 0.0),
         Quat::identity(),
-        math::make_vec3(0.0, 0.0, 0.0)
+        math::make_vec3(0.0, 0.0, 0.0),
+        0.0
     };
 }
 
@@ -232,8 +380,9 @@ void FailureDetector::record_reliable_state(int64_t t_ns,
                                             const Vec3& p,
                                             const Vec3& v,
                                             const Quat& q,
-                                            const Vec3& omega_s) {
-    ring_buffer_.push(t_ns, p, v, q, omega_s);
+                                            const Vec3& omega_s,
+                                            double w_walk) {
+    ring_buffer_.push(t_ns, p, v, q, omega_s, w_walk);
     last_valid_t_ns_ = t_ns;
     invalid_start_ns_ = -1;
 }
@@ -243,13 +392,14 @@ bool FailureDetector::update(int64_t t_ns,
                              const Vec3& p,
                              const Vec3& v,
                              const Quat& q,
-                             const Vec3& omega_s) {
+                             const Vec3& omega_s,
+                             double w_walk) {
     if (is_failed_) {
         return true;
     }
 
     if (is_valid) {
-        record_reliable_state(t_ns, p, v, q, omega_s);
+        record_reliable_state(t_ns, p, v, q, omega_s, w_walk);
         invalid_start_ns_ = -1;
         last_valid_t_ns_ = t_ns;
         return false;
@@ -294,7 +444,8 @@ void FailureDetector::notify_stream_end(int64_t final_t_ns) {
             math::make_vec3(0.0, 0.0, 0.0),
             math::make_vec3(0.0, 0.0, 0.0),
             Quat::identity(),
-            math::make_vec3(0.0, 0.0, 0.0)
+            math::make_vec3(0.0, 0.0, 0.0),
+            0.0
         };
     }
     failure_time_ns_ = (final_t_ns > 0) ? final_t_ns : frozen_state_.t_ns;
@@ -309,7 +460,8 @@ void FailureDetector::predict(int64_t t_ns, Vec3& out_p, Quat& out_q) const {
                        frozen_state_.omega_s,
                        tau,
                        out_p,
-                       out_q);
+                       out_q,
+                       frozen_state_.w_walk);
 }
 
 void FailureDetector::predict_tau(double tau, Vec3& out_p, Quat& out_q) const {
@@ -319,5 +471,6 @@ void FailureDetector::predict_tau(double tau, Vec3& out_p, Quat& out_q) const {
                        frozen_state_.omega_s,
                        tau,
                        out_p,
-                       out_q);
+                       out_q,
+                       frozen_state_.w_walk);
 }

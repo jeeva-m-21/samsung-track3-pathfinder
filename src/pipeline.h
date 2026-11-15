@@ -22,6 +22,12 @@ struct PipelineOptions {
     AblationMode mode = AblationMode::ESKF_FULL;
     bool append_blind = false;
     bool disable_spike_filter = false;
+    bool enable_adaptive_q = params::enable_adaptive_q;
+    bool adaptive_q_scale_acc = params::adaptive_q_scale_acc;
+    double adaptive_q_alpha = params::adaptive_q_alpha;
+    double adaptive_q_min = params::adaptive_q_min;
+    double adaptive_q_max = params::adaptive_q_max;
+    bool enable_unbiased_adaptive_q = params::enable_unbiased_adaptive_q;
 #ifdef ENABLE_ORACLES
     const char* telemetry_path = nullptr;
     const char* oracle_gt_path = nullptr;
