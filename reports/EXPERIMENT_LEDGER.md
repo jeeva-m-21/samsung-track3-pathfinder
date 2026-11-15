@@ -1283,3 +1283,18 @@ Reason: Satisfies all 6 acceptance conditions under GEMINI.md (Blind 5s RMSE imp
 
 ---
 
+## EXP-E75b: Gated InEKF & Dual-Regime Observer Selection
+- **Branch:** `exp/E75b-gated-inekf`
+- **Parent Tag:** `submission-v2` (`a3eb654`)
+- **Worker:** Orchestrator Diagnostic & Worker E75b
+- **Hypothesis:** Preserve EXP-E75's massive gains on `MH_01_easy` (Blind -83.4%, Gap -34.5%, Clean Att -81.4%) and `room2` (Blind -65.0%, Gap -56.6%, ATE -25.0%) while eliminating the collateral blowups on `room1` (+199.6% Blind) and `V2_02_medium` (+146.6% Blind) via surgical gating (Config A: zero pseudo-gain, Config B: dynamic acceleration gating, Config C: dual-regime selection).
+- **Evaluation & Diagnostic Findings:**
+  - **Calm Sequence Superiority Confirmed:** Across all runs, InEKF produced remarkable reductions on steady/calm sequences: on `MH_01_easy`, Blind dropped from 4.16 m to 0.65 m (-84%) and Gap dropped from 12.31 m to 6.78 m (-45%); on `room2`, Blind dropped from 7.30 m to 0.30 m (-96%) and Gap dropped from 7.14 m to 0.72 m (-90%).
+  - **High-Dynamic Breakdown:** On agile flight (`V2_02_medium`) and heavy-impact walking (`room1`), linear dynamic acceleration ($a_{\text{dyn}} \gg 0$) severely violates InEKF's gravity assumption ($F_{v,\theta} = [g_w]_\times$). Even when decoupled into a pure 3x3 $SO(3)$ orientation observer with strict dynamic acceleration gating and $\chi^2 \le 9.0$, InEKF tilt updates in banked turns and swinging motions degrade heading: `V2_02_medium` Blind worsened from 2.62 m to 6.75 m (+157%) and `room1` Blind worsened from 1.12 m to 6.98 m (+523%).
+  - **Rule 7 Violation:** Violates Condition 2 (Collateral Suite Degradation > 3%) and Condition 3 (Per-Sequence Degradation > 15%).
+- **Decision:** **REJECT / PARK**
+- **Action:** Cleanly aborted, temporary worktree deleted, and `master` preserved intact at `submission-v2` (`a3eb654`).
+
+
+---
+
