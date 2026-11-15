@@ -99,6 +99,7 @@ constexpr bool adaptive_q_scale_acc = false;
 constexpr double adaptive_q_alpha = 0.005;
 constexpr double adaptive_q_min = 1.0;
 constexpr double adaptive_q_max = 25.0;
+constexpr bool enable_unbiased_adaptive_q = true;
 
 } // namespace params
 

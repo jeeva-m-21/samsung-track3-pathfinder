@@ -90,5 +90,6 @@
   "adaptive_q_scale_acc": false,
   "adaptive_q_alpha": 0.005,
   "adaptive_q_min": 1.0,
-  "adaptive_q_max": 25.0
+  "adaptive_q_max": 25.0,
+  "enable_unbiased_adaptive_q": true
 }
