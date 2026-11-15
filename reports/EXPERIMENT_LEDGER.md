@@ -1240,3 +1240,46 @@ Reason: Satisfies all 6 acceptance conditions under GEMINI.md (Blind 5s RMSE imp
 
 ---
 
+## EXP-E75: Lever-Arm-Free SE_2(3) InEKF & Dual-Estimator Architecture
+- **Branch:** `exp/E75-lever-arm-free-inekf` (commit `f6884f1`)
+- **Parent Tag:** `submission-v2` (`7391db0`)
+- **Worker:** Worker E75 (`222f07ed-0df4-4833-8d1b-f90870fa3a37`)
+- **Hypothesis:** Eliminating position lever-arm adjoint terms $[\hat{p}]_\times \hat{R}$ from the $SE_2(3)$ InEKF error dynamics while retaining InEKF rotation/velocity precision will cut pre-gap attitude/yaw drift without the large-displacement blowup seen in E74.
+- **Worker Evaluation Numbers (Dev Seeds 1–10, 50 runs):**
+  - **Attitude Precision Confirmed:** Clean `MH_01_easy` attitude error slashed by **-81.41%** (63.95° -> 11.89°); suite attitude error improved by **-6.75%** on dev (78.89° -> 73.57°) and **-8.19%** on confirmation (79.90° -> 73.36°).
+  - **Significant Gains on Calm Sequences:** `MH_01_easy` Blind 5s dropped **-83.4%** (4.07 m -> 0.68 m) and Gap 2s dropped **-34.5%** (12.19 m -> 7.98 m); `room2` ATE improved **-25.0%** (1.72 m -> 1.29 m) and Blind 5s dropped **-65.0%** (4.56 m -> 1.60 m).
+  - **Confirmation Suite:** Gap 2s improved by **-14.57%** (4.95 m -> 4.23 m, 95% bootstrap CI `[-1.412, -0.051]` m, strictly excluding zero!).
+  - **Collateral Failures on Dynamic Sequences:** Without exteroceptive position landmarks, InEKF's autonomous error dynamics assumption breaks down under high linear acceleration ($\|\hat{a}_w\| \gg 0$) during agile turns (`V2_02_medium` Blind +146.6%) and walking foot-strike harmonics (`room1` ATE +57.8%, Blind +199.6%), pushing overall Dev Blind 5s to +17.2%.
+- **Decision:** **REJECT / PARK**
+- **Deciding Rule:** Rule 7 Condition 2 (Collateral suite degradation > 3%) and Condition 3 (Per-sequence degradation > 15%).
+
+---
+
+## EXP-E76: Offline Two-Pass Warmup Calibration & Zero-Lag Smoothing
+- **Branch:** `exp/E76-offline-twopass-calibration` (commit `ff6deb6`)
+- **Parent Tag:** `submission-v2` (`7391db0`)
+- **Worker:** Worker E76 (`d2111bf1-c9b1-430b-a5b7-2425196e4297`)
+- **Hypothesis:** Running a fast 2-pass offline refinement over $t \le 20$s will extract converged bias estimates $(b_{g0}, b_{a0})$ and locate the lowest-motion 1.0s window for gravity alignment, improving pre-gap trajectory accuracy.
+- **Worker Evaluation Numbers (Dev Seeds 1–10, 50 runs):**
+  - **Unobservable Bias Drift:** In strapdown dead-reckoning without external velocity/position aiding, horizontal acceleration and accelerometer bias $b_a$ are mathematically unobservable. Ingesting unobservable bias estimates at $t=0$ induced quadratic position drift over the full trajectory (+9.91% Blind 5s, +8.33% Gap 2s).
+  - **Pedestrian Bias Absorption:** Walking turns in closed loops were falsely absorbed as constant gyro biases, causing `room1` Blind 5s to explode by **+111.9%** (2.24 m -> 4.75 m).
+  - **Window Finding:** Shortening the launch velocity anchor window from 1.0 s to 0.30 s worsened Blind 5s by +6.47% due to insufficient high-frequency noise smoothing.
+- **Decision:** **REJECT / PARK**
+- **Deciding Rule:** Rule 7 Condition 1 (No target component improvement; regressions across all configurations).
+
+---
+
+## EXP-E77: Pre-Gap Attitude/Bias RTS Smoother & Iterated EKF (IEKF)
+- **Branch:** `exp/E77-pregap-attitude-rts-iekf` (commit `b39c813`)
+- **Parent Tag:** `submission-v2` (`7391db0`)
+- **Worker:** Worker E77 (`c471e488-0ef0-4045-a763-03299e5d1dc5`)
+- **Hypothesis:** Running Iterated EKF (IEKF) Gauss-Newton updates on non-linear tilt/drag, and/or an offline RTS backward pass across $t \le 25$s on $(\theta, b_g, b_a)$, will eliminate pre-gap heading drift.
+- **Worker Evaluation Numbers (Dev Seeds 1–10, 50 runs):**
+  - **Sub-config A (IEKF):** Gauss-Newton local iterations re-linearized on foot-strike acceleration spikes during walking, tilting pitch/roll away from true gravity (+2.62% Blind 5s, +1.29% Gap 2s).
+  - **Sub-config B (Full Velocity Re-Integration):** Lacked online adaptive Q and covariance conditioning, causing residual bias integration drift to compound entering the gap (+28.17% Blind 5s, +26.03% Gap 2s).
+  - **Sub-config B (Attitude-Only RTS):** Proved mathematically that at the boundary $t = 25$s entering the gap, $\hat{x}_{N-1|N} \equiv \hat{x}_{N-1|N-1}$ because there are zero future observations in the window. Smoothing historical states has 0.00% leverage on the terminal gap state.
+- **Decision:** **REJECT / PARK**
+- **Deciding Rule:** Rule 7 Condition 1 (Target component does not improve).
+
+---
+
