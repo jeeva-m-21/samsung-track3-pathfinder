@@ -145,8 +145,11 @@ Mat15 build_q_matrix(double dt,
         return Q;
     }
 
-    double sigma_g = params::sigma_g_base * noise_mult_gyro * kappa;
-    double sigma_a = params::sigma_a_base * noise_mult_acc * kappa;
+    double mult_g = params::enable_unbiased_adaptive_q ? std::max(noise_mult_gyro, kappa) : (noise_mult_gyro * kappa);
+    double mult_a = params::enable_unbiased_adaptive_q ? std::max(noise_mult_acc, kappa) : (noise_mult_acc * kappa);
+
+    double sigma_g = params::sigma_g_base * mult_g;
+    double sigma_a = params::sigma_a_base * mult_a;
     double sigma_bg = params::sigma_bg_base * walk_mult_bg;
     double sigma_ba = params::sigma_ba_base * walk_mult_ba;
 

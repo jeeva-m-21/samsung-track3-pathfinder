@@ -44,13 +44,16 @@ void test_elevated_noise() {
     double target_sigma_a = 0.32; // 4x params::sigma_a_base (0.08)
 
     for (int i = 0; i < 2000; ++i) {
-        math::Vec3 w = math::make_vec3(rand_normal() * target_sigma_g,
-                                       rand_normal() * target_sigma_g,
-                                       rand_normal() * target_sigma_g);
-        math::Vec3 a = math::make_vec3(rand_normal() * target_sigma_a,
-                                       rand_normal() * target_sigma_a,
-                                       9.81 + rand_normal() * target_sigma_a);
-        est.update(w, a);
+        double cur_sig_g = (i < 400) ? params::sigma_g_base : target_sigma_g;
+        double cur_sig_a = (i < 400) ? params::sigma_a_base : target_sigma_a;
+        math::Vec3 w = math::make_vec3(rand_normal() * cur_sig_g,
+                                       rand_normal() * cur_sig_g,
+                                       rand_normal() * cur_sig_g);
+        math::Vec3 a = math::make_vec3(rand_normal() * cur_sig_a,
+                                       rand_normal() * cur_sig_a,
+                                       9.81 + rand_normal() * cur_sig_a);
+        double t = i * 0.005;
+        est.update(w, a, t);
     }
 
     double mult_g = est.get_gyro_mult();

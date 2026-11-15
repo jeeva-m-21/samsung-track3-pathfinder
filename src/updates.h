@@ -12,7 +12,8 @@
 bool tilt_gating(const Vec3& acc,
                  const Vec3& omega,
                  double g_mag = 9.80665,
-                 double quality = 1.0);
+                 double quality = 1.0,
+                 double noise_mult = 1.0);
 
 // Compute tilt innovation y = z - h_hat and predicted gravity direction in body frame (SPEC §12.5)
 void compute_tilt_innovation(const NominalState& state,
@@ -43,7 +44,8 @@ bool apply_tilt_update(NominalState& state,
                        double quality,
                        const Vec3& g_w,
                        double gate_threshold = 1e9,
-                       double r_scale = 1.0);
+                       double r_scale = 1.0,
+                       double noise_mult = 1.0);
 
 // Overload without explicit omega (assumes stationary/near-zero gyro)
 bool apply_tilt_update(NominalState& state,

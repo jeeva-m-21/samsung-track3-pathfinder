@@ -4,14 +4,20 @@
 bool tilt_gating(const Vec3& acc,
                  const Vec3& omega,
                  double g_mag,
-                 double quality) {
+                 double quality,
+                 double noise_mult) {
     double omega_norm = omega.norm();
     if (omega_norm >= params::tilt_omega_max) {
         return false;
     }
 
     double q_clamped = (quality < 0.0) ? 0.0 : ((quality > 1.0) ? 1.0 : quality);
-    double tau_eff = params::tilt_tau_a * (1.0 + 5.0 * (1.0 - q_clamped));
+    double tau_base = params::tilt_tau_a;
+    if (params::enable_adaptive_tilt_gate) {
+        double mult = (noise_mult < 1.0) ? 1.0 : ((noise_mult > 3.0) ? 3.0 : noise_mult);
+        tau_base = params::tilt_tau_a * mult;
+    }
+    double tau_eff = tau_base * (1.0 + 5.0 * (1.0 - q_clamped));
 
     double acc_norm = acc.norm();
     double acc_dev = std::abs(acc_norm - g_mag);
@@ -91,7 +97,8 @@ bool apply_tilt_update(NominalState& state,
                        double quality,
                        const Vec3& g_w,
                        double gate_threshold,
-                       double r_scale) {
+                       double r_scale,
+                       double noise_mult) {
     double g_mag = g_w.norm();
     if (g_mag < 1e-12) {
         g_mag = 9.80665;
@@ -111,7 +118,7 @@ bool apply_tilt_update(NominalState& state,
         a_gating = acc - a_centripetal;
     }
 
-    if (!tilt_gating(a_gating, omega, g_mag, quality)) {
+    if (!tilt_gating(a_gating, omega, g_mag, quality, noise_mult)) {
         return false;
     }
 

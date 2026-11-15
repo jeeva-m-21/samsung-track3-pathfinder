@@ -29,6 +29,10 @@ int main(int argc, char* argv[]) {
             options.adaptive_q_max = std::atof(argv[i] + 17);
         } else if (std::strncmp(argv[i], "--adaptive-q-alpha=", 19) == 0) {
             options.adaptive_q_alpha = std::atof(argv[i] + 19);
+        } else if (std::strcmp(argv[i], "--enable-unbiased-adaptive-q") == 0) {
+            options.enable_unbiased_adaptive_q = true;
+        } else if (std::strcmp(argv[i], "--disable-unbiased-adaptive-q") == 0) {
+            options.enable_unbiased_adaptive_q = false;
 #ifdef ENABLE_ORACLES
         } else if (std::strcmp(argv[i], "--telemetry") == 0) {
             if (i + 1 < argc) {
