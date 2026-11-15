@@ -1192,3 +1192,35 @@ Reason: Satisfies all 6 acceptance conditions under GEMINI.md (Blind 5s RMSE imp
 
 ---
 
+## EXP-E72: Walking-Gated Drone Gap Angular Rate Decay
+- **Branch:** `exp/E72-drone-gap-omega-decay` (commit `e4a3ca7`)
+- **Parent Tag:** `best-011` (`4a85e29`)
+- **Worker:** Worker E72 (`78f297ae-016b-47e4-82fd-cc643406a18a`)
+- **Hypothesis:** Gating gap angular rate decay strictly on non-walking dynamics ($w_{\text{walk}} < 0.5$) will protect pedestrian walking sequences (`room1`, `room2`) from turn-erasure regressions while slashing drone gap errors on `MH_01_easy`.
+- **Worker Evaluation Numbers (Dev Seeds 1–10, 50 runs):**
+  - **Gap 2s RMSE:** 4.6523 m -> 3.6053 m (**-22.51% relative**, delta: -1.0471 m, 95% CI `[-1.6084, -0.5185]` m).
+  - **Blind 5s RMSE:** 3.0611 m -> 2.6629 m (**-13.01% relative**, delta: -0.3982 m, 95% CI `[-0.8023, -0.0177]` m).
+  - **Waypoint ATE RMSE:** 2.0062 m -> 2.0753 m (+3.45% relative).
+  - **MH_01_easy:** Gap 2s dropped -38.53% (12.19 m -> 7.49 m); Blind 5s dropped -75.39% (4.07 m -> 1.00 m).
+  - **Pedestrian Sequences:** `room1` and `room2` exhibited exact **0.00% delta** (100% protected).
+  - **Collateral Failures:** `V1_01_easy` Gap regressed by **+40.53%** (1.87 m -> 2.63 m); `V2_02_medium` Blind 5s regressed by **+41.50%** (2.67 m -> 3.78 m). Agile 3D quadrotor turns during gaps require continuous angular rates.
+- **Decision:** **REJECT / PARK**
+- **Deciding Rule:** Rule 7 Condition 3 ("Per-sequence guard: No single sequence worsens > 15%").
+
+---
+
+## EXP-E73: Clean Noise Scale Guard
+- **Branch:** `exp/E73-clean-noise-scale-guard` (commit `f648cdd`)
+- **Parent Tag:** `best-011` (`4a85e29`)
+- **Worker:** Worker E73 (`0eacd2be-36b7-4dfd-afb6-2277ff4c8886`)
+- **Hypothesis:** Relaxing velocity damping and Ornstein-Uhlenbeck drift correlation ($\tau_{\text{ou}}$) when both `AdaptiveQEstimator` and `DegradationMonitor` indicate clean telemetry will cut clean `MH_01_easy` APE/RPE without degrading degraded evaluation sets.
+- **Worker Evaluation Numbers (Dev Seeds 1–10, 50 runs):**
+  - **Telemetry Check:** On actual drone flight, motor vibrations keep $\kappa \in [4.0, 6.55]$ on clean data, making a static threshold of $1.15$ inactive for 97.6% of flight time.
+  - **Physics Sweep:** Forcing $\tau_{\text{ou}}$ relaxation active across flight allowed accelerometer bias integration drift to compound, worsening APE (from 3.685 m to 3.880 m at $\tau_{\text{mult}} = 3.5$).
+  - **Dev Degradation Delta:** ATE -0.01%, Blind -0.01%, Gap -0.09% (all $\le 0.09\%$, strictly regression-free on degraded sets).
+  - **Clean APE Delta:** 3.6853 m -> 3.6856 m (+0.008%, no target gain).
+- **Decision:** **REJECT / PARK**
+- **Deciding Rule:** Rule 7 Condition 1 ("Target component improves $\ge 5\%$ relative").
+
+---
+
