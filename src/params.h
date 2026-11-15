@@ -102,6 +102,7 @@ constexpr double adaptive_q_max = 25.0;
 constexpr bool enable_unbiased_adaptive_q = true;
 constexpr bool enable_adaptive_tilt_gate = true;
 constexpr double adaptive_q_ref = 0.006;
+constexpr bool enable_init_hardening = true;
 
 } // namespace params
 

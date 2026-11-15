@@ -93,5 +93,6 @@
   "adaptive_q_max": 25.0,
   "enable_unbiased_adaptive_q": true,
   "enable_adaptive_tilt_gate": true,
-  "adaptive_q_ref": 0.006
+  "adaptive_q_ref": 0.006,
+  "enable_init_hardening": true
 }

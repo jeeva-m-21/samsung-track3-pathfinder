@@ -19,9 +19,14 @@ Quat compute_initial_tilt(const Vec3& a_mean) {
     if (!std::isfinite(cos_theta) || cos_theta > 0.999999999) {
         return Quat{1.0, 0.0, 0.0, 0.0};
     }
-    if (cos_theta < -0.999999999) {
-        // 180 degree rotation about x: R * [0, 0, -1] = [0, 0, 1]
-        return Quat{0.0, 1.0, 0.0, 0.0};
+    if (params::enable_init_hardening ? (1.0 + v.data[2] < 1e-4) : (cos_theta < -0.999999999)) {
+        // Robust 180-deg flip quaternion math near 180 degrees
+        double d_xy = std::sqrt(v.data[0] * v.data[0] + v.data[1] * v.data[1]);
+        if (d_xy > 1e-6) {
+            return Quat{0.0, v.data[1] / d_xy, -v.data[0] / d_xy, 0.0};
+        } else {
+            return Quat{0.0, 1.0, 0.0, 0.0};
+        }
     }
 
     // Cross product v x u with target u = [0, 0, 1]:
@@ -314,10 +319,14 @@ void Initializer::finish(NominalState& state, Mat15& P0, Vec3& g_w) const {
     // Gravity magnitude clamping and world gravity vector
     double norm_a = a_ref.norm();
     double g_mag = norm_a;
-    if (!std::isfinite(g_mag) || g_mag < params::g_mag_clamp_min) {
-        g_mag = params::g_mag_clamp_min;
-    } else if (g_mag > params::g_mag_clamp_max) {
-        g_mag = params::g_mag_clamp_max;
+    if (params::enable_init_hardening && motion_detected_) {
+        g_mag = 9.80665;
+    } else {
+        if (!std::isfinite(g_mag) || g_mag < params::g_mag_clamp_min) {
+            g_mag = params::g_mag_clamp_min;
+        } else if (g_mag > params::g_mag_clamp_max) {
+            g_mag = params::g_mag_clamp_max;
+        }
     }
     g_mag_ = g_mag;
     g_w = make_vec3(0.0, 0.0, -g_mag);

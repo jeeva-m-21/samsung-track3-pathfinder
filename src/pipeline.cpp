@@ -1567,6 +1567,12 @@ int run_eskf_full(const char* input_path,
                     }
                 }
 
+                if (params::enable_init_hardening) {
+                    estimator_q.reset();
+                    walk_det.reset();
+                    monitor.reset();
+                }
+
                 for (size_t idx = 0; idx < init_count; ++idx) {
                     int64_t t_smp = s_init_buf[idx].t_ns;
                     Vec3 w_smp = s_init_buf[idx].omega;
