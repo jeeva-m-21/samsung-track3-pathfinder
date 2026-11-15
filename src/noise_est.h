@@ -160,7 +160,7 @@ struct AdaptiveQEstimator {
         if (!params::enable_unbiased_adaptive_q) {
             return 1.0;
         }
-        double base_g = (sigma_hat_g_0 > 1e-6) ? sigma_hat_g_0 : params::sigma_g_base;
+        double base_g = std::max((sigma_hat_g_0 > 1e-6) ? sigma_hat_g_0 : params::sigma_g_base, params::adaptive_q_ref);
         double rho = sigma_hat_g / base_g;
         return (rho > 1.0) ? rho : 1.0;
     }
@@ -172,7 +172,7 @@ struct AdaptiveQEstimator {
             return std::clamp(kappa, min_mult, max_mult);
         }
 
-        double base_g = (sigma_hat_g_0 > 1e-6) ? sigma_hat_g_0 : params::sigma_g_base;
+        double base_g = std::max((sigma_hat_g_0 > 1e-6) ? sigma_hat_g_0 : params::sigma_g_base, params::adaptive_q_ref);
         double kappa = sigma_hat_g / base_g;
         return std::clamp(kappa, min_mult, max_mult);
     }

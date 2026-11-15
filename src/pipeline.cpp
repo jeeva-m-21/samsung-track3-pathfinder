@@ -1396,7 +1396,7 @@ int run_eskf_full(const char* input_path,
         if (step_res.apply_updates) {
 #ifdef ENABLE_ORACLES
             if (!options.disable_tilt) {
-                tilt_applied = apply_tilt_update(state, P, acc_filt, omega_curr, monitor.quality(), g_w, 1e9, step_res.r_scale);
+                tilt_applied = apply_tilt_update(state, P, acc_filt, omega_curr, monitor.quality(), g_w, 1e9, step_res.r_scale, monitor.kappa());
             }
             if (is_stat && !options.disable_zupt) {
                 apply_zupt_update(state, P, 1e9, step_res.r_scale);
@@ -1409,7 +1409,7 @@ int run_eskf_full(const char* input_path,
                 vel_bounded = apply_velocity_bounding(state, P, max_v);
             }
 #else
-            tilt_applied = apply_tilt_update(state, P, acc_filt, omega_curr, monitor.quality(), g_w, 1e9, step_res.r_scale);
+            tilt_applied = apply_tilt_update(state, P, acc_filt, omega_curr, monitor.quality(), g_w, 1e9, step_res.r_scale, monitor.kappa());
             if (is_stat) {
                 apply_zupt_update(state, P, 1e9, step_res.r_scale);
             } else if (is_flight && params::enable_rotor_drag) {
