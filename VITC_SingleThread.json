@@ -24,6 +24,6 @@
     "dropout_rmse_m": 4.5832,
     "improvement_vs_baseline_pct": 65.3
   },
-  "commit": "99be8b4",
-  "release_tag": "best-011"
+  "commit": "fdd105c",
+  "release_tag": "submission-v2"
 }
