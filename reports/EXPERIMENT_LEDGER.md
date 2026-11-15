@@ -1283,18 +1283,19 @@ Reason: Satisfies all 6 acceptance conditions under GEMINI.md (Blind 5s RMSE imp
 
 ---
 
-## EXP-E75b: Gated InEKF & Dual-Regime Observer Selection
-- **Branch:** `exp/E75b-gated-inekf`
+## EXP-E78: Blind Smooth Yaw & Windowed Launch Anchor
+- **Branch:** `exp/E78-blind-smooth-yaw` (commit `7b8d7c0`)
 - **Parent Tag:** `submission-v2` (`a3eb654`)
-- **Worker:** Orchestrator Diagnostic & Worker E75b
-- **Hypothesis:** Preserve EXP-E75's massive gains on `MH_01_easy` (Blind -83.4%, Gap -34.5%, Clean Att -81.4%) and `room2` (Blind -65.0%, Gap -56.6%, ATE -25.0%) while eliminating the collateral blowups on `room1` (+199.6% Blind) and `V2_02_medium` (+146.6% Blind) via surgical gating (Config A: zero pseudo-gain, Config B: dynamic acceleration gating, Config C: dual-regime selection).
-- **Evaluation & Diagnostic Findings:**
-  - **Calm Sequence Superiority Confirmed:** Across all runs, InEKF produced remarkable reductions on steady/calm sequences: on `MH_01_easy`, Blind dropped from 4.16 m to 0.65 m (-84%) and Gap dropped from 12.31 m to 6.78 m (-45%); on `room2`, Blind dropped from 7.30 m to 0.30 m (-96%) and Gap dropped from 7.14 m to 0.72 m (-90%).
-  - **High-Dynamic Breakdown:** On agile flight (`V2_02_medium`) and heavy-impact walking (`room1`), linear dynamic acceleration ($a_{\text{dyn}} \gg 0$) severely violates InEKF's gravity assumption ($F_{v,\theta} = [g_w]_\times$). Even when decoupled into a pure 3x3 $SO(3)$ orientation observer with strict dynamic acceleration gating and $\chi^2 \le 9.0$, InEKF tilt updates in banked turns and swinging motions degrade heading: `V2_02_medium` Blind worsened from 2.62 m to 6.75 m (+157%) and `room1` Blind worsened from 1.12 m to 6.98 m (+523%).
-  - **Rule 7 Violation:** Violates Condition 2 (Collateral Suite Degradation > 3%) and Condition 3 (Per-Sequence Degradation > 15%).
+- **Worker:** Worker E78 (`94451dbd-ff37-4625-ba79-ad2e60daf2f8`)
+- **Hypothesis:** Averaging $(v_f, \omega_f)$ over an optimal trailing window $W$ in `ReliableRingBuffer` and projecting walking angular rate onto the world-Z yaw axis only will cut Blind 5s RMSE across room2, MH_01, and V2_02 with 0.00% risk to $t < t_{\text{blind}}$.
+- **Worker Evaluation Numbers (Dev Seeds 1–10, 50 runs per config):**
+  - **Sub-A (Windowed Anchor Sweep):** $W = 1.0\text{ s}$ is already at near-optimal empirical baseline ($3.0611\text{ m}$). Shorter windows ($0.20\text{ s}$, $0.40\text{ s}$) worsened Blind 5s by $+7.44\%$ and $+4.94\%$ due to un-averaged sensor noise. $W = 0.90\text{ s}$ showed marginal delta ($-0.69\%$, $-0.0211\text{ m}$).
+  - **Sub-B (Yaw-Only Walk Turn):** When $w_{\text{walk}} \ge 0.5$, projecting $\omega_f$ onto the world-Z yaw axis eliminated stride wobble during turns, cutting rotation error by **-5.36%** ($78.89^\circ \to 74.67^\circ$, CI `[-6.69, -1.99]`) and `room1` Blind 5s by **-2.13%**, but dev aggregate Blind 5s improved only $-0.13\%$ ($-0.0038\text{ m}$, CI spans 0).
+  - **Sub-C (Split Windows + Yaw Projection):** $W_{\text{flight}} = 1.00\text{ s}$, $W_{\text{walk}} = 0.85\text{ s}$ cut `room1` Blind 5s by **-7.65%** ($2.2403 \to 2.0690\text{ m}$) and rotation error by **-5.78%** ($78.89^\circ \to 74.33^\circ$), but suite Blind 5s improved by only **-1.34%** ($-0.0410\text{ m}$, 95% bootstrap CI `[-0.0881, +0.0023]` m, spanning 0).
+  - **Budgets & Integrity:** Peak RSS 1.89 MB ($\le 4.0\text{ MB}$), compute 2.18 ms/s ($\le 5.0\text{ ms/s}$), 0 heap allocations, 1,246 C++ tests pass, 215 pytests pass, ASan/UBSan clean.
 - **Decision:** **REJECT / PARK**
-- **Action:** Cleanly aborted, temporary worktree deleted, and `master` preserved intact at `submission-v2` (`a3eb654`).
-
+- **Deciding Rule:** Rule 7 Condition 1 (Target component gain must be $\ge 5\%$ relative, 95% bootstrap CI must exclude 0, and gain must be $\ge 2\times$ noise-floor std). Here, suite gain is $-1.34\%$ and CI spans zero.
 
 ---
+
 
