@@ -278,13 +278,27 @@ def load_imu_arrays(input_path: str):
         s = line.strip()
         if not s or s.startswith("#"):
             continue
-        parts = [p.strip() for p in (s.split(",") if "," in s else s.split())]
+        parts = s.split(",") if "," in s else s.split()
         if not parts or not parts[0]:
             continue
+
+        p0 = parts[0].strip()
         try:
-            t_val = float(parts[0])
+            t_val = float(p0)
         except ValueError:
             continue
+
+        if len(parts) >= 7:
+            try:
+                data_rows.append((
+                    t_val,
+                    float(parts[1]), float(parts[2]), float(parts[3]),
+                    float(parts[4]), float(parts[5]), float(parts[6])
+                ))
+                ts_strs.append(p0)
+                continue
+            except ValueError:
+                pass
 
         row_vals = [np.nan] * 6
         for k in range(6):
@@ -296,7 +310,7 @@ def load_imu_arrays(input_path: str):
                 except ValueError:
                     pass
         data_rows.append((t_val, *row_vals))
-        ts_strs.append(parts[0])
+        ts_strs.append(p0)
 
     n = len(data_rows)
     if n == 0:
@@ -511,7 +525,7 @@ def preprocess_offline(t_s: np.ndarray, acc: np.ndarray, gyr: np.ndarray, params
 class DegradationMonitor:
     __slots__ = (
         "alpha", "kappa_max", "sample_count",
-        "prev_a", "prev_w", "has_prev",
+        "prev_ax", "prev_ay", "prev_az", "prev_gx", "prev_gy", "prev_gz", "has_prev",
         "var_acc", "var_gyr", "var_acc_ref", "var_gyr_ref",
         "calibrated", "quality", "kappa"
     )
@@ -523,8 +537,12 @@ class DegradationMonitor:
 
     def reset(self):
         self.sample_count = 0
-        self.prev_a = (0.0, 0.0, 0.0)
-        self.prev_w = (0.0, 0.0, 0.0)
+        self.prev_ax = 0.0
+        self.prev_ay = 0.0
+        self.prev_az = 0.0
+        self.prev_gx = 0.0
+        self.prev_gy = 0.0
+        self.prev_gz = 0.0
         self.has_prev = False
         self.var_acc = 0.0
         self.var_gyr = 0.0
@@ -536,25 +554,25 @@ class DegradationMonitor:
 
     def step(self, t_elapsed: float, ax: float, ay: float, az: float, gx: float, gy: float, gz: float, t_init: float):
         if not self.has_prev:
-            self.prev_a = (ax, ay, az)
-            self.prev_w = (gx, gy, gz)
+            self.prev_ax = ax; self.prev_ay = ay; self.prev_az = az
+            self.prev_gx = gx; self.prev_gy = gy; self.prev_gz = gz
             self.has_prev = True
             self.sample_count = 1
             return
 
         # High-frequency differential residual between adjacent samples
-        da_x = ax - self.prev_a[0]
-        da_y = ay - self.prev_a[1]
-        da_z = az - self.prev_a[2]
+        da_x = ax - self.prev_ax
+        da_y = ay - self.prev_ay
+        da_z = az - self.prev_az
         r_k = math.sqrt(da_x * da_x + da_y * da_y + da_z * da_z)
 
-        dw_x = gx - self.prev_w[0]
-        dw_y = gy - self.prev_w[1]
-        dw_z = gz - self.prev_w[2]
+        dw_x = gx - self.prev_gx
+        dw_y = gy - self.prev_gy
+        dw_z = gz - self.prev_gz
         rho_k = math.sqrt(dw_x * dw_x + dw_y * dw_y + dw_z * dw_z)
 
-        self.prev_a = (ax, ay, az)
-        self.prev_w = (gx, gy, gz)
+        self.prev_ax = ax; self.prev_ay = ay; self.prev_az = az
+        self.prev_gx = gx; self.prev_gy = gy; self.prev_gz = gz
 
         # Exponential moving variance of residuals
         alpha = self.alpha
@@ -598,10 +616,10 @@ class SparseESKF:
     __slots__ = (
         "p", "v", "q", "bg", "ba", "P", "g_mag", "params",
         "vibe_ema", "ped_energy", "gyro_ema", "dyn_acc_ema",
-        "prev_a_raw", "has_prev_raw",
+        "prev_ax_raw", "prev_ay_raw", "prev_az_raw", "has_prev_raw",
         "recover_counter", "win_w", "win_a_norm",
         "ring", "ring_cap", "monitor", "q_scale_g", "q_scale_a",
-        "F", "Q", "Hb", "sinv", "y_vec"
+        "F", "Q", "Hb", "sinv", "y_vec", "G3", "R_q"
     )
 
     def __init__(self, params: dict):
@@ -618,7 +636,9 @@ class SparseESKF:
         self.ped_energy = 0.0
         self.gyro_ema = 0.0
         self.dyn_acc_ema = 0.0
-        self.prev_a_raw = [0.0, 0.0, 0.0]
+        self.prev_ax_raw = 0.0
+        self.prev_ay_raw = 0.0
+        self.prev_az_raw = 0.0
         self.has_prev_raw = False
         self.recover_counter = 0
 
@@ -640,6 +660,8 @@ class SparseESKF:
         self.Hb = np.zeros((3, 3), dtype=np.float64)
         self.sinv = np.zeros((3, 3), dtype=np.float64)
         self.y_vec = np.zeros(3, dtype=np.float64)
+        self.G3 = np.eye(3, dtype=np.float64)
+        self.R_q = quat_to_rot(self.q)
 
     def initialize(self, t_arr, acc_arr, gyr_arr, dup_mask, invalid_mask, end_init_idx: int):
         wx_sum = wy_sum = wz_sum = 0.0
@@ -736,6 +758,7 @@ class SparseESKF:
         self.ba = [0.0, 0.0, 0.0]
         self.p = [0.0, 0.0, 0.0]
         self.v = [0.0, 0.0, 0.0]
+        self.R_q = quat_to_rot(self.q)
         self._set_p0(motion_detected)
 
     def _set_p0(self, motion_detected: bool):
@@ -795,12 +818,12 @@ class SparseESKF:
 
         # EMA trackers for flight/pedestrian regime and dynamic velocity envelope
         if not self.has_prev_raw:
-            self.prev_a_raw = [ax, ay, az]
+            self.prev_ax_raw = ax; self.prev_ay_raw = ay; self.prev_az_raw = az
             self.has_prev_raw = True
         else:
-            da_x = ax - self.prev_a_raw[0]
-            da_y = ay - self.prev_a_raw[1]
-            da_z = az - self.prev_a_raw[2]
+            da_x = ax - self.prev_ax_raw
+            da_y = ay - self.prev_ay_raw
+            da_z = az - self.prev_az_raw
             d_a = math.sqrt(da_x * da_x + da_y * da_y + da_z * da_z)
             self.vibe_ema = 0.98 * self.vibe_ema + 0.02 * d_a
             dev_a = abs(a_norm - self.g_mag)
@@ -808,7 +831,7 @@ class SparseESKF:
             if quality >= 0.5 and dev_a < 12.0:
                 a_excess = max(0.0, a_norm - self.g_mag)
                 self.dyn_acc_ema = 0.95 * self.dyn_acc_ema + 0.05 * a_excess
-            self.prev_a_raw = [ax, ay, az]
+            self.prev_ax_raw = ax; self.prev_ay_raw = ay; self.prev_az_raw = az
 
         self.gyro_ema = 0.98 * self.gyro_ema + 0.02 * w_mag
         is_flight = (self.vibe_ema > pr["flight_vibe_thresh"])
@@ -854,7 +877,8 @@ class SparseESKF:
         self.q = q_new
 
         # 2. Sparse Covariance Propagation
-        r00, r01, r02, r10, r11, r12, r20, r21, r22 = quat_to_rot(q_cur)
+        r00, r01, r02, r10, r11, r12, r20, r21, r22 = self.R_q
+        self.R_q = quat_to_rot(q_new)
         f00, f01, f02, f10, f11, f12, f20, f21, f22 = quat_to_rot(
             rotvec_to_quat(-wx * dt, -wy * dt, -wz * dt)
         )
@@ -929,7 +953,7 @@ class SparseESKF:
             )
         elif is_flight and pr["enable_rotor_drag"]:
             if w_mag <= 2.5 and (3.0 <= a_norm <= 35.0):
-                r00, r01, r02, r10, r11, r12, r20, r21, r22 = quat_to_rot(self.q)
+                r00, r01, r02, r10, r11, r12, r20, r21, r22 = self.R_q
                 vx, vy, vz = self.v
                 vbx = r00 * vx + r10 * vy + r20 * vz
                 vby = r01 * vx + r11 * vy + r21 * vz
@@ -947,7 +971,7 @@ class SparseESKF:
                     m_dim=2, nu=pr["nu_vel"]
                 )
         elif is_pedestrian and pr["enable_pedestrian_prior"]:
-            r00, r01, r02, r10, r11, r12, r20, r21, r22 = quat_to_rot(self.q)
+            r00, r01, r02, r10, r11, r12, r20, r21, r22 = self.R_q
             vx, vy, vz = self.v
             vby = r01 * vx + r11 * vy + r21 * vz
             rlat = (pr["ped_sigma_lat"] ** 2) * r_scale
@@ -968,7 +992,7 @@ class SparseESKF:
         a_hat_norm = math.sqrt(acx * acx + acy * acy + acz * acz)
 
         if w_mag < pr["tilt_omega_max"] and abs(a_hat_norm - self.g_mag) < tau_eff and a_hat_norm > 1e-6:
-            r00, r01, r02, r10, r11, r12, r20, r21, r22 = quat_to_rot(self.q)
+            r00, r01, r02, r10, r11, r12, r20, r21, r22 = self.R_q
             inv_an = 1.0 / a_hat_norm
             zx, zy, zz = acx * inv_an, acy * inv_an, acz * inv_an
             hx, hy, hz = r20, r21, r22
@@ -1174,7 +1198,6 @@ class SparseESKF:
         dx = K @ y_vec
 
         self.P = P - K @ HP
-        self.P = 0.5 * (self.P + self.P.T)
 
         dth0, dth1, dth2 = dx[0], dx[1], dx[2]
         self.q = quat_norm_align(quat_mul(self.q, rotvec_to_quat(dth0, dth1, dth2)), self.q)
@@ -1192,18 +1215,18 @@ class SparseESKF:
         self.ba[2] += dx[14]
 
         if abs(dth0) + abs(dth1) + abs(dth2) > 1e-12:
+            self.R_q = quat_to_rot(self.q)
             g01, g02 = 0.5 * dth2, -0.5 * dth1
             g10, g12 = -0.5 * dth2, 0.5 * dth0
             g20, g21 = 0.5 * dth1, -0.5 * dth0
-            G3 = np.array([
-                [1.0, g01, g02],
-                [g10, 1.0, g12],
-                [g20, g21, 1.0]
-            ], dtype=np.float64)
+            G3 = self.G3
+            G3[0, 1] = g01; G3[0, 2] = g02
+            G3[1, 0] = g10; G3[1, 2] = g12
+            G3[2, 0] = g20; G3[2, 1] = g21
             self.P[:3, :] = G3 @ self.P[:3, :]
             self.P[:, :3] = self.P[:3, :].T
-            self.P = 0.5 * (self.P + self.P.T)
 
+        self.P = 0.5 * (self.P + self.P.T)
         for i in range(15):
             if self.P[i, i] < 1e-12:
                 self.P[i, i] = 1e-12
