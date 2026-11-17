@@ -94,5 +94,9 @@
   "enable_unbiased_adaptive_q": true,
   "enable_adaptive_tilt_gate": true,
   "adaptive_q_ref": 0.0033119250641368016,
-  "enable_init_hardening": true
+  "enable_init_hardening": true,
+  "enable_student_t_updates": true,
+  "student_t_nu": 8.0,
+  "student_t_clamp_min": 1.0,
+  "student_t_clamp_max": 100.0
 }

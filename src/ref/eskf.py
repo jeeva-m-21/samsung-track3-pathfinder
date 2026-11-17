@@ -36,6 +36,7 @@ Constraints:
 - Portable to fixed-size C++17 Mat<15, 15> and Mat<3, 3>.
 """
 
+import math
 from typing import Any, Dict, Optional, Tuple, Union
 import numpy as np
 
@@ -472,3 +473,124 @@ def eskf_measurement_update(
         new_P = P_post
 
     return new_state, new_P, delta_x
+
+
+def joseph_update(
+    state: NominalState,
+    P: np.ndarray,
+    H: np.ndarray,
+    y: np.ndarray,
+    R: np.ndarray,
+    gate_threshold: float = 1e9,
+    params: Optional[Dict[str, Any]] = None,
+    m: int = 0,
+    apply_reset: bool = True,
+) -> Tuple[NominalState, np.ndarray, bool]:
+    """Execute Joseph-form measurement update with optional Student-t covariance scaling (EXP-E82).
+
+    When params.get("enable_student_t_updates", True) and m > 0:
+        d2 = y^T * S^{-1} * y  (Mahalanobis distance)
+        nu = params.get("student_t_nu", 8.0)
+        d2_clamped = min(d2, clamp_max)
+        w = clamp((nu + d2_clamped) / (nu + m), clamp_min, clamp_max)
+        R_eff = R * w
+        Recompute S_eff = H P H^T + R_eff, S_eff_inv
+        Kalman gain K = P H^T S_eff_inv
+        (No chi-2 gating applied; outlier is softly down-weighted)
+    Else:
+        Standard update with chi-2 gate: if d2 > gate_threshold: return state, P, False
+
+    Args:
+        state: Current NominalState.
+        P: (15, 15) error covariance matrix.
+        H: (M, 15) measurement matrix.
+        y: (M,) measurement innovation.
+        R: (M, M) measurement noise covariance.
+        gate_threshold: Chi-squared innovation gate threshold.
+        params: Optional configuration dictionary.
+        m: Measurement dimension degrees of freedom for Student-t (0 disables Student-t).
+        apply_reset: Whether to apply covariance reset P <- G P G^T.
+
+    Returns:
+        state_post: Updated NominalState (or unchanged copy if rejected).
+        P_post: Updated error covariance matrix (or unchanged copy if rejected).
+        accepted: True if update was accepted and applied, False if rejected by gating.
+    """
+    if params is None:
+        p_cfg = load_params()
+    else:
+        p_cfg = params
+
+    diag_floor = float(p_cfg.get("cov_diag_floor", 1e-12))
+    diag_cap = float(p_cfg.get("cov_diag_cap", 1e6))
+
+    H_arr = np.asarray(H, dtype=np.float64)
+    y_arr = np.asarray(y, dtype=np.float64).reshape(-1)
+    R_arr = np.asarray(R, dtype=np.float64)
+
+    HP = H_arr @ P
+    HPH_T = HP @ H_arr.T
+    S = HPH_T + R_arr
+
+    try:
+        if S.shape == (3, 3):
+            S_inv = invert_3x3(S, det_floor=diag_floor)
+        else:
+            S_inv = np.linalg.inv(S)
+    except Exception:
+        return state, P, False
+
+    S_inv_y = S_inv @ y_arr
+    d2 = float(y_arr @ S_inv_y)
+    if math.isnan(d2) or math.isinf(d2) or d2 < 0.0:
+        return state, P, False
+
+    enable_student_t = bool(p_cfg.get("enable_student_t_updates", False))
+    if enable_student_t and m > 0:
+        nu = float(p_cfg.get("student_t_nu", 8.0))
+        clamp_min = float(p_cfg.get("student_t_clamp_min", 1.0))
+        clamp_max = float(p_cfg.get("student_t_clamp_max", 100.0))
+
+        d2_clamped = min(d2, clamp_max)
+        w = (nu + d2_clamped) / (nu + float(m))
+        w = float(np.clip(w, clamp_min, clamp_max))
+
+        R_eff = R_arr * w
+        S_eff = HPH_T + R_eff
+        try:
+            if S_eff.shape == (3, 3):
+                S_eff_inv = invert_3x3(S_eff, det_floor=diag_floor)
+            else:
+                S_eff_inv = np.linalg.inv(S_eff)
+        except Exception:
+            return state, P, False
+    else:
+        if gate_threshold > 0.0 and d2 > gate_threshold:
+            return state, P, False
+        R_eff = R_arr
+        S_eff_inv = S_inv
+
+    # Kalman gain K = P H^T S_eff^{-1}
+    K = P @ H_arr.T @ S_eff_inv
+
+    # Error state correction delta_x = K y
+    delta_x = K @ y_arr
+
+    # Joseph-form covariance update: (I - KH) P (I - KH)^T + K R_eff K^T
+    I_KH = np.eye(15, dtype=np.float64) - K @ H_arr
+    P_post = I_KH @ P @ I_KH.T + K @ R_eff @ K.T
+    P_post = condition_covariance(P_post, diag_floor=diag_floor, diag_cap=diag_cap)
+
+    # State injection
+    new_state = eskf_inject_nominal_state(state, delta_x)
+
+    # Covariance reset
+    if apply_reset:
+        new_P = eskf_reset_covariance(
+            P_post, delta_x[0:3], diag_floor=diag_floor, diag_cap=diag_cap
+        )
+    else:
+        new_P = P_post
+
+    return new_state, new_P, True
+

@@ -28,6 +28,7 @@ from src.ref.eskf import (
     eskf_predict_covariance,
     eskf_reset_covariance,
     invert_3x3,
+    joseph_update,
 )
 from src.ref.init import NominalState, load_params
 from src.ref.mathlib import quat_exp, quat_mult, quat_to_rot_matrix, skew
@@ -330,3 +331,59 @@ def test_full_measurement_update_step(default_params, initial_state_and_cov):
     # Covariance should remain valid and symmetric
     assert np.allclose(new_P, new_P.T, atol=1e-14)
     assert np.all(np.linalg.eigvalsh(new_P) > 0)
+
+
+def test_student_t_scales_outlier():
+    """Verify Student-t covariance scaling down-weights outliers softly without hard rejection."""
+    q0 = np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float64)
+    state = NominalState(
+        p=np.zeros(3, dtype=np.float64),
+        v=np.zeros(3, dtype=np.float64),
+        q=q0,
+        b_g=np.zeros(3, dtype=np.float64),
+        b_a=np.zeros(3, dtype=np.float64),
+    )
+    P = np.eye(15, dtype=np.float64) * 0.01
+
+    H = np.zeros((3, 15), dtype=np.float64)
+    H[0:3, 3:6] = np.eye(3)
+    y = np.array([10.0, 0.0, 0.0], dtype=np.float64)  # Large outlier innovation
+    R = np.eye(3, dtype=np.float64) * 0.01
+
+    params_standard = {
+        "enable_student_t_updates": False,
+        "cov_diag_floor": 1e-12,
+        "cov_diag_cap": 1e6,
+    }
+    params_student_t = {
+        "enable_student_t_updates": True,
+        "student_t_nu": 8.0,
+        "student_t_clamp_min": 1.0,
+        "student_t_clamp_max": 100.0,
+        "cov_diag_floor": 1e-12,
+        "cov_diag_cap": 1e6,
+    }
+
+    # Standard update without student_t (large gate so it's accepted)
+    state_std, P_std, ok_std = joseph_update(
+        state.copy(), P.copy(), H, y, R, gate_threshold=1e9, params=params_standard, m=0
+    )
+    assert ok_std is True
+    correction_std = np.linalg.norm(state_std.v - state.v)
+
+    # Student-t update with m=3
+    state_st, P_st, ok_st = joseph_update(
+        state.copy(), P.copy(), H, y, R, gate_threshold=1e9, params=params_student_t, m=3
+    )
+    assert ok_st is True
+    correction_st = np.linalg.norm(state_st.v - state.v)
+
+    # With Student-t, the correction should be strictly smaller (soft discounting)
+    assert correction_st < correction_std
+    # Furthermore, verify that m=0 with student_t enabled falls back to standard gate / no student-t
+    # If gate_threshold is small, m=0 should reject
+    _, _, ok_rej = joseph_update(
+        state.copy(), P.copy(), H, y, R, gate_threshold=1.0, params=params_student_t, m=0
+    )
+    assert ok_rej is False
+

@@ -45,6 +45,7 @@ import numpy as np
 from src.ref.eskf import (
     NominalState,
     eskf_measurement_update,
+    joseph_update,
     load_params,
 )
 from src.ref.mathlib import (
@@ -252,11 +253,12 @@ def tilt_update(
 
     R = build_tilt_r_matrix(quality=quality, params=p_cfg, r_scale=r_scale * dynamic_scale)
 
-    new_state, new_P, delta_x = eskf_measurement_update(
-        state, P, H, y, R, params=p_cfg, apply_reset=apply_reset
+    gate_threshold = float(p_cfg.get("tilt_gate_threshold", 1e9))
+    new_state, new_P, updated = joseph_update(
+        state, P, H, y, R, gate_threshold=gate_threshold, params=p_cfg, m=3, apply_reset=apply_reset
     )
 
-    return new_state, new_P, delta_x, True
+    return new_state, new_P, np.zeros(15, dtype=np.float64), updated
 
 
 # ---------------------------------------------------------------------------
@@ -719,20 +721,9 @@ def apply_rotor_drag_update(
 
     R_drag = (sigma ** 2) * np.eye(2, dtype=np.float64)
 
-    # Check innovation gate: S = H @ P @ H.T + R
-    S = H @ P_decoupled @ H.T + R_drag
-    try:
-        S_inv = np.linalg.inv(S)
-    except np.linalg.LinAlgError:
-        return state, P, False
-    gamma = float(y.T @ S_inv @ y)
-    if gate_threshold > 0.0 and gamma > gate_threshold:
-        return state, P, False
-
-    updated_state, updated_P, _ = eskf_measurement_update(
-        state, P_decoupled, H, y, R_drag, params=params
+    return joseph_update(
+        state, P_decoupled, H, y, R_drag, gate_threshold=gate_threshold, params=params, m=0
     )
-    return updated_state, updated_P, True
 
 
 def apply_pedestrian_prior(
@@ -767,18 +758,8 @@ def apply_pedestrian_prior(
 
     R_ped = np.diag([sigma_lat ** 2, sigma_vert ** 2])
 
-    S = H @ P_decoupled @ H.T + R_ped
-    try:
-        S_inv = np.linalg.inv(S)
-    except np.linalg.LinAlgError:
-        return state, P, False
-    gamma = float(y.T @ S_inv @ y)
-    if gate_threshold > 0.0 and gamma > gate_threshold:
-        return state, P, False
-
-    updated_state, updated_P, _ = eskf_measurement_update(
-        state, P_decoupled, H, y, R_ped, params=params
+    return joseph_update(
+        state, P_decoupled, H, y, R_ped, gate_threshold=gate_threshold, params=params, m=2
     )
-    return updated_state, updated_P, True
 
 
