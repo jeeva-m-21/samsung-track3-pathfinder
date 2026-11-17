@@ -601,7 +601,7 @@ class SparseESKF:
         "prev_a_raw", "has_prev_raw",
         "recover_counter", "win_w", "win_a_norm",
         "ring", "ring_cap", "monitor", "q_scale_g", "q_scale_a",
-        "fp", "hp0", "hp1", "hp2", "k0", "k1", "k2", "w0", "w1", "w2", "dx"
+        "F", "Q", "Hb", "sinv", "y_vec"
     )
 
     def __init__(self, params: dict):
@@ -611,7 +611,7 @@ class SparseESKF:
         self.q = (1.0, 0.0, 0.0, 0.0)
         self.bg = [0.0, 0.0, 0.0]
         self.ba = [0.0, 0.0, 0.0]
-        self.P = [[0.0] * 15 for _ in range(15)]
+        self.P = np.zeros((15, 15), dtype=np.float64)
         self.g_mag = G_STD
 
         self.vibe_ema = 0.0
@@ -634,18 +634,12 @@ class SparseESKF:
         self.q_scale_g = 1.0
         self.q_scale_a = 1.0
 
-        # Preallocated scratch buffers (zero per-frame heap allocation)
-        self.fp = [[0.0] * 15 for _ in range(9)]
-        self.hp0 = [0.0] * 15
-        self.hp1 = [0.0] * 15
-        self.hp2 = [0.0] * 15
-        self.k0 = [0.0] * 15
-        self.k1 = [0.0] * 15
-        self.k2 = [0.0] * 15
-        self.w0 = [0.0] * 15
-        self.w1 = [0.0] * 15
-        self.w2 = [0.0] * 15
-        self.dx = [0.0] * 15
+        # Vectorized SIMD preallocated matrices (zero per-frame heap allocation)
+        self.F = np.eye(15, dtype=np.float64)
+        self.Q = np.zeros((15, 15), dtype=np.float64)
+        self.Hb = np.zeros((3, 3), dtype=np.float64)
+        self.sinv = np.zeros((3, 3), dtype=np.float64)
+        self.y_vec = np.zeros(3, dtype=np.float64)
 
     def initialize(self, t_arr, acc_arr, gyr_arr, dup_mask, invalid_mask, end_init_idx: int):
         wx_sum = wy_sum = wz_sum = 0.0
@@ -746,10 +740,7 @@ class SparseESKF:
 
     def _set_p0(self, motion_detected: bool):
         P = self.P
-        for i in range(15):
-            row = P[i]
-            for j in range(15):
-                row[j] = 0.0
+        P.fill(0.0)
         sig_th = self.params["sigma_theta_0"] * (self.params["motion_detect_sigma_theta_mult"] if motion_detected else 1.0)
         sig_v = self.params["sigma_v_0"]
         sig_p = self.params["sigma_p_0"]
@@ -757,11 +748,11 @@ class SparseESKF:
         sig_ba = self.params["sigma_ba_0"]
 
         for i in range(3):
-            P[i][i] = sig_th * sig_th
-            P[i + 3][i + 3] = sig_v * sig_v
-            P[i + 6][i + 6] = sig_p * sig_p
-            P[i + 9][i + 9] = sig_bg * sig_bg
-            P[i + 12][i + 12] = sig_ba * sig_ba
+            P[i, i] = sig_th * sig_th
+            P[i + 3, i + 3] = sig_v * sig_v
+            P[i + 6, i + 6] = sig_p * sig_p
+            P[i + 9, i + 9] = sig_bg * sig_bg
+            P[i + 12, i + 12] = sig_ba * sig_ba
 
     def get_w_walk(self) -> float:
         if self.vibe_ema > self.params["flight_vibe_thresh"]:
@@ -1056,9 +1047,9 @@ class SparseESKF:
         q_v = (pr["sigma_a_base"] ** 2) * k_gap * gap_dt
         q_p = 0.01 * gap_dt
         for i in range(3):
-            P[i][i] = min(1e6, P[i][i] + q_th)
-            P[i + 3][i + 3] = min(1e6, P[i + 3][i + 3] + q_v)
-            P[i + 6][i + 6] = min(1e6, P[i + 6][i + 6] + q_p)
+            P[i, i] = min(1e6, P[i, i] + q_th)
+            P[i + 3, i + 3] = min(1e6, P[i + 3, i + 3] + q_v)
+            P[i + 6, i + 6] = min(1e6, P[i + 6, i + 6] + q_p)
         self.recover_counter = pr["recover_steps"]
 
     def _propagate_cov(
@@ -1068,88 +1059,37 @@ class SparseESKF:
         r00, r01, r02, r10, r11, r12, r20, r21, r22,
         q_th, q_v, q_bg, q_ba,
     ):
-        P = self.P
-        p0, p1, p2 = P[0], P[1], P[2]
-        p3, p4, p5 = P[3], P[4], P[5]
-        p6, p7, p8 = P[6], P[7], P[8]
-        p9, p10, p11 = P[9], P[10], P[11]
-        p12, p13, p14 = P[12], P[13], P[14]
-
-        fps = self.fp
-        fp0, fp1, fp2, fp3, fp4, fp5, fp6, fp7, fp8 = fps
+        F = self.F
+        F[0, 0] = f00; F[0, 1] = f01; F[0, 2] = f02; F[0, 9] = -dt; F[0, 10] = 0.0; F[0, 11] = 0.0
+        F[1, 0] = f10; F[1, 1] = f11; F[1, 2] = f12; F[1, 9] = 0.0; F[1, 10] = -dt; F[1, 11] = 0.0
+        F[2, 0] = f20; F[2, 1] = f21; F[2, 2] = f22; F[2, 9] = 0.0; F[2, 10] = 0.0; F[2, 11] = -dt
 
         rdt00, rdt01, rdt02 = r00 * dt, r01 * dt, r02 * dt
         rdt10, rdt11, rdt12 = r10 * dt, r11 * dt, r12 * dt
         rdt20, rdt21, rdt22 = r20 * dt, r21 * dt, r22 * dt
 
-        for j in range(15):
-            a0, a1, a2 = p0[j], p1[j], p2[j]
-            v0, v1, v2 = p3[j], p4[j], p5[j]
-            bg0, bg1, bg2 = p9[j], p10[j], p11[j]
-            ba0, ba1, ba2 = p12[j], p13[j], p14[j]
+        F[3, 0] = ft00; F[3, 1] = ft01; F[3, 2] = ft02
+        F[3, 3] = gam;  F[3, 4] = 0.0;  F[3, 5] = 0.0
+        F[3, 12] = -rdt00; F[3, 13] = -rdt01; F[3, 14] = -rdt02
 
-            fp0[j] = f00 * a0 + f01 * a1 + f02 * a2 - dt * bg0
-            fp1[j] = f10 * a0 + f11 * a1 + f12 * a2 - dt * bg1
-            fp2[j] = f20 * a0 + f21 * a1 + f22 * a2 - dt * bg2
+        F[4, 0] = ft10; F[4, 1] = ft11; F[4, 2] = ft12
+        F[4, 3] = 0.0;  F[4, 4] = gam;  F[4, 5] = 0.0
+        F[4, 12] = -rdt10; F[4, 13] = -rdt11; F[4, 14] = -rdt12
 
-            fp3[j] = ft00 * a0 + ft01 * a1 + ft02 * a2 + gam * v0 - (rdt00 * ba0 + rdt01 * ba1 + rdt02 * ba2)
-            fp4[j] = ft10 * a0 + ft11 * a1 + ft12 * a2 + gam * v1 - (rdt10 * ba0 + rdt11 * ba1 + rdt12 * ba2)
-            fp5[j] = ft20 * a0 + ft21 * a1 + ft22 * a2 + gam * v2 - (rdt20 * ba0 + rdt21 * ba1 + rdt22 * ba2)
+        F[5, 0] = ft20; F[5, 1] = ft21; F[5, 2] = ft22
+        F[5, 3] = 0.0;  F[5, 4] = 0.0;  F[5, 5] = gam
+        F[5, 12] = -rdt20; F[5, 13] = -rdt21; F[5, 14] = -rdt22
 
-            fp6[j] = p6[j] + dt * v0
-            fp7[j] = p7[j] + dt * v1
-            fp8[j] = p8[j] + dt * v2
+        F[6, 3] = dt; F[7, 4] = dt; F[8, 5] = dt
 
-        fps = (fp0, fp1, fp2, fp3, fp4, fp5, fp6, fp7, fp8, p9, p10, p11, p12, p13, p14)
+        Q = self.Q
+        Q[0, 0] = Q[1, 1] = Q[2, 2] = q_th
+        Q[3, 3] = Q[4, 4] = Q[5, 5] = q_v
+        Q[9, 9] = Q[10, 10] = Q[11, 11] = q_bg
+        Q[12, 12] = Q[13, 13] = Q[14, 14] = q_ba
 
-        for i in range(9):
-            row = fps[i]
-            out = P[i]
-            c0, c1, c2 = row[0], row[1], row[2]
-            cv0, cv1, cv2 = row[3], row[4], row[5]
-            cbg0, cbg1, cbg2 = row[9], row[10], row[11]
-            cba0, cba1, cba2 = row[12], row[13], row[14]
-
-            out[0] = c0 * f00 + c1 * f01 + c2 * f02 - dt * cbg0
-            out[1] = c0 * f10 + c1 * f11 + c2 * f12 - dt * cbg1
-            out[2] = c0 * f20 + c1 * f21 + c2 * f22 - dt * cbg2
-
-            out[3] = c0 * ft00 + c1 * ft01 + c2 * ft02 + gam * cv0 - (rdt00 * cba0 + rdt01 * cba1 + rdt02 * cba2)
-            out[4] = c0 * ft10 + c1 * ft11 + c2 * ft12 + gam * cv1 - (rdt10 * cba0 + rdt11 * cba1 + rdt12 * cba2)
-            out[5] = c0 * ft20 + c1 * ft21 + c2 * ft22 + gam * cv2 - (rdt20 * cba0 + rdt21 * cba1 + rdt22 * cba2)
-
-            out[6] = row[6] + dt * cv0
-            out[7] = row[7] + dt * cv1
-            out[8] = row[8] + dt * cv2
-
-            out[9], out[10], out[11] = cbg0, cbg1, cbg2
-            out[12], out[13], out[14] = cba0, cba1, cba2
-
-        for i in range(9, 15):
-            out = P[i]
-            for j in range(9):
-                out[j] = P[j][i]
-
-        for i in range(3):
-            P[i][i] += q_th
-            P[i + 3][i + 3] += q_v
-            P[i + 9][i + 9] += q_bg
-            P[i + 12][i + 12] += q_ba
-
-        for i in range(15):
-            row_i = P[i]
-            for j in range(i + 1, 15):
-                sym = 0.5 * (row_i[j] + P[j][i])
-                row_i[j] = sym
-                P[j][i] = sym
-            if row_i[i] < 1e-12:
-                row_i[i] = 1e-12
-            elif row_i[i] > 1e6:
-                sc = math.sqrt(1e6 / row_i[i])
-                for j in range(15):
-                    row_i[j] *= sc
-                for j in range(15):
-                    P[j][i] *= sc
+        P = F @ self.P @ F.T + Q
+        self.P = 0.5 * (P + P.T)
 
     def _update_block3(
         self, blk: int, y0: float, y1: float, y2: float,
@@ -1162,45 +1102,38 @@ class SparseESKF:
     ):
         P = self.P
         if clear_pv:
-            for ii in range(6, 9):
-                row_p = P[ii]
-                row_p[3] = row_p[4] = row_p[5] = 0.0
-                P[3][ii] = P[4][ii] = P[5][ii] = 0.0
+            P[6:9, 3:6] = 0.0
+            P[3:6, 6:9] = 0.0
 
-        pb0 = P[blk]
-        pb1 = P[blk + 1]
-        pb2 = P[blk + 2]
+        Hb = self.Hb
+        Hb[0, 0] = h00; Hb[0, 1] = h01; Hb[0, 2] = h02
+        Hb[1, 0] = h10; Hb[1, 1] = h11; Hb[1, 2] = h12
+        Hb[2, 0] = h20; Hb[2, 1] = h21; Hb[2, 2] = h22
 
-        hp0 = self.hp0
-        hp1 = self.hp1
-        hp2 = self.hp2
-        for j in range(15):
-            v0, v1, v2 = pb0[j], pb1[j], pb2[j]
-            hp0[j] = h00 * v0 + h01 * v1 + h02 * v2
-            hp1[j] = h10 * v0 + h11 * v1 + h12 * v2
-            hp2[j] = h20 * v0 + h21 * v1 + h22 * v2
+        HP = Hb @ P[blk:blk+3, :]  # (3, 15)
+        S = HP[:, blk:blk+3] @ Hb.T
+        s00 = S[0, 0] + r0; s01 = S[0, 1];      s02 = S[0, 2]
+        s10 = S[1, 0];      s11 = S[1, 1] + r1; s12 = S[1, 2]
+        s20 = S[2, 0];      s21 = S[2, 1];      s22 = S[2, 2] + r2
 
-        b0, b1, b2 = blk, blk + 1, blk + 2
-        s00 = hp0[b0] * h00 + hp0[b1] * h01 + hp0[b2] * h02 + r0
-        s01 = hp0[b0] * h10 + hp0[b1] * h11 + hp0[b2] * h12
-        s02 = hp0[b0] * h20 + hp0[b1] * h21 + hp0[b2] * h22
-        s10 = hp1[b0] * h00 + hp1[b1] * h01 + hp1[b2] * h02
-        s11 = hp1[b0] * h10 + hp1[b1] * h11 + hp1[b2] * h12 + r1
-        s12 = hp1[b0] * h20 + hp1[b1] * h21 + hp1[b2] * h22
-        s20 = hp2[b0] * h00 + hp2[b1] * h01 + hp2[b2] * h02
-        s21 = hp2[b0] * h10 + hp2[b1] * h11 + hp2[b2] * h12
-        s22 = hp2[b0] * h20 + hp2[b1] * h21 + hp2[b2] * h22 + r2
-
-        sinv = inv3x3(s00, s01, s02, s10, s11, s12, s20, s21, s22)
-        if sinv is None:
+        c00 = s11 * s22 - s12 * s21
+        c01 = s12 * s20 - s10 * s22
+        c02 = s10 * s21 - s11 * s20
+        det = s00 * c00 + s01 * c01 + s02 * c02
+        if abs(det) < 1e-15:
             return
-        si00, si01, si02, si10, si11, si12, si20, si21, si22 = sinv
+        inv_det = 1.0 / det
 
-        t0 = si00 * y0 + si01 * y1 + si02 * y2
-        t1 = si10 * y0 + si11 * y1 + si12 * y2
-        t2 = si20 * y0 + si21 * y1 + si22 * y2
-        d2 = y0 * t0 + y1 * t1 + y2 * t2
+        sinv = self.sinv
+        sinv[0, 0] = c00 * inv_det; sinv[0, 1] = (s02 * s21 - s01 * s22) * inv_det; sinv[0, 2] = (s01 * s12 - s02 * s11) * inv_det
+        sinv[1, 0] = c01 * inv_det; sinv[1, 1] = (s00 * s22 - s02 * s20) * inv_det; sinv[1, 2] = (s02 * s10 - s00 * s12) * inv_det
+        sinv[2, 0] = c02 * inv_det; sinv[2, 1] = (s01 * s20 - s00 * s21) * inv_det; sinv[2, 2] = (s00 * s11 - s01 * s10) * inv_det
 
+        d2 = (
+            y0 * (sinv[0, 0] * y0 + sinv[0, 1] * y1 + sinv[0, 2] * y2) +
+            y1 * (sinv[1, 0] * y0 + sinv[1, 1] * y1 + sinv[1, 2] * y2) +
+            y2 * (sinv[2, 0] * y0 + sinv[2, 1] * y1 + sinv[2, 2] * y2)
+        )
         if not math.isfinite(d2):
             return
 
@@ -1217,60 +1150,31 @@ class SparseESKF:
                 r1 *= scale
                 if m_dim == 3:
                     r2 *= scale
-                s00 = hp0[b0] * h00 + hp0[b1] * h01 + hp0[b2] * h02 + r0
-                s11 = hp1[b0] * h10 + hp1[b1] * h11 + hp1[b2] * h12 + r1
-                s22 = hp2[b0] * h20 + hp2[b1] * h21 + hp2[b2] * h22 + r2
-                sinv = inv3x3(s00, s01, s02, s10, s11, s12, s20, s21, s22)
-                if sinv is None:
+                s00 = S[0, 0] + r0
+                s11 = S[1, 1] + r1
+                s22 = S[2, 2] + r2
+                c00 = s11 * s22 - s12 * s21
+                c01 = s12 * s20 - s10 * s22
+                c02 = s10 * s21 - s11 * s20
+                det = s00 * c00 + s01 * c01 + s02 * c02
+                if abs(det) < 1e-15:
                     return
-                si00, si01, si02, si10, si11, si12, si20, si21, si22 = sinv
+                inv_det = 1.0 / det
+                sinv[0, 0] = c00 * inv_det; sinv[0, 1] = (s02 * s21 - s01 * s22) * inv_det; sinv[0, 2] = (s01 * s12 - s02 * s11) * inv_det
+                sinv[1, 0] = c01 * inv_det; sinv[1, 1] = (s00 * s22 - s02 * s20) * inv_det; sinv[1, 2] = (s02 * s10 - s00 * s12) * inv_det
+                sinv[2, 0] = c02 * inv_det; sinv[2, 1] = (s01 * s20 - s00 * s21) * inv_det; sinv[2, 2] = (s00 * s11 - s01 * s10) * inv_det
         else:
             if d2 > gate_threshold:
                 return
 
-        k0 = self.k0
-        k1 = self.k1
-        k2 = self.k2
-        dx = self.dx
-        for i in range(15):
-            a, b, c = hp0[i], hp1[i], hp2[i]
-            ki0 = a * si00 + b * si10 + c * si20
-            ki1 = a * si01 + b * si11 + c * si21
-            ki2 = a * si02 + b * si12 + c * si22
-            k0[i], k1[i], k2[i] = ki0, ki1, ki2
-            dx[i] = ki0 * y0 + ki1 * y1 + ki2 * y2
+        y_vec = self.y_vec
+        y_vec[0] = y0; y_vec[1] = y1; y_vec[2] = y2
 
-        w0 = self.w0
-        w1 = self.w1
-        w2 = self.w2
-        hb0, hb1, hb2 = hp0[b0], hp1[b0], hp2[b0]
-        hc0, hc1, hc2 = hp0[b1], hp1[b1], hp2[b1]
-        hd0, hd1, hd2 = hp0[b2], hp1[b2], hp2[b2]
-        for i in range(15):
-            row_i = P[i]
-            ki0, ki1, ki2 = k0[i], k1[i], k2[i]
-            ub0 = row_i[b0] - (ki0 * hb0 + ki1 * hb1 + ki2 * hb2)
-            ub1 = row_i[b1] - (ki0 * hc0 + ki1 * hc1 + ki2 * hc2)
-            ub2 = row_i[b2] - (ki0 * hd0 + ki1 * hd1 + ki2 * hd2)
-            uh0 = ub0 * h00 + ub1 * h01 + ub2 * h02
-            uh1 = ub0 * h10 + ub1 * h11 + ub2 * h12
-            uh2 = ub0 * h20 + ub1 * h21 + ub2 * h22
-            w0[i] = ki0 * r0 - uh0
-            w1[i] = ki1 * r1 - uh1
-            w2[i] = ki2 * r2 - uh2
+        K = HP.T @ sinv  # (15, 3)
+        dx = K @ y_vec
 
-        for i in range(15):
-            row_i = P[i]
-            ki0, ki1, ki2 = k0[i], k1[i], k2[i]
-            wi0, wi1, wi2 = w0[i], w1[i], w2[i]
-            for j in range(i, 15):
-                val = (
-                    row_i[j]
-                    - (ki0 * hp0[j] + ki1 * hp1[j] + ki2 * hp2[j])
-                    + (wi0 * k0[j] + wi1 * k1[j] + wi2 * k2[j])
-                )
-                row_i[j] = val
-                P[j][i] = val
+        self.P = P - K @ HP
+        self.P = 0.5 * (self.P + self.P.T)
 
         dth0, dth1, dth2 = dx[0], dx[1], dx[2]
         self.q = quat_norm_align(quat_mul(self.q, rotvec_to_quat(dth0, dth1, dth2)), self.q)
@@ -1291,22 +1195,18 @@ class SparseESKF:
             g01, g02 = 0.5 * dth2, -0.5 * dth1
             g10, g12 = -0.5 * dth2, 0.5 * dth0
             g20, g21 = 0.5 * dth1, -0.5 * dth0
-            p0, p1, p2 = P[0], P[1], P[2]
-            for j in range(15):
-                a0, a1, a2 = p0[j], p1[j], p2[j]
-                p0[j] = a0 + g01 * a1 + g02 * a2
-                p1[j] = g10 * a0 + a1 + g12 * a2
-                p2[j] = g20 * a0 + g21 * a1 + a2
-            for i in range(15):
-                ri = P[i]
-                a0, a1, a2 = ri[0], ri[1], ri[2]
-                ri[0] = a0 + a1 * g01 + a2 * g02
-                ri[1] = a0 * g10 + a1 + a2 * g12
-                ri[2] = a0 * g20 + a1 * g21 + a2
+            G3 = np.array([
+                [1.0, g01, g02],
+                [g10, 1.0, g12],
+                [g20, g21, 1.0]
+            ], dtype=np.float64)
+            self.P[:3, :] = G3 @ self.P[:3, :]
+            self.P[:, :3] = self.P[:3, :].T
+            self.P = 0.5 * (self.P + self.P.T)
 
         for i in range(15):
-            if P[i][i] < 1e-12:
-                P[i][i] = 1e-12
+            if self.P[i, i] < 1e-12:
+                self.P[i, i] = 1e-12
 
 
 # ---------------------------------------------------------------------------
