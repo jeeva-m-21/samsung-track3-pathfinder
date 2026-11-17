@@ -14,6 +14,7 @@ Handles:
 """
 
 from enum import IntFlag
+import itertools
 import json
 import math
 from pathlib import Path
@@ -71,14 +72,19 @@ def is_comment_or_blank(line: str) -> bool:
 def parse_imu_line(
     line: str,
     params: Optional[Dict[str, Any]] = None,
+    official_format: bool = False,
 ) -> Tuple[Optional[int], np.ndarray, np.ndarray, bool, int]:
-    """Pure function to parse a single IMU line in EuRoC format.
+    """Pure function to parse a single IMU line in EuRoC or official format.
 
-    Format: timestamp [ns], w_RS_S_x, w_RS_S_y, w_RS_S_z, a_RS_S_x, a_RS_S_y, a_RS_S_z
+    EuRoC format (official_format=False):
+        timestamp [ns], w_RS_S_x, w_RS_S_y, w_RS_S_z, a_RS_S_x, a_RS_S_y, a_RS_S_z
+    Official format (official_format=True):
+        timestamp, accel_x, accel_y, accel_z, gyro_x, gyro_y, gyro_z
 
     Args:
         line: Raw text line.
         params: Configuration dictionary containing invalid_gyro_max and invalid_acc_max.
+        official_format: When True, columns 1:4 are accel and 4:7 are gyro.
 
     Returns:
         t_ns: int timestamp in nanoseconds, or None if unparseable/missing/comment.
@@ -129,7 +135,7 @@ def parse_imu_line(
             except ValueError:
                 flags |= ParserFlags.MISSING_TIMESTAMP
 
-    # 2. Parse 6 measurement fields: wx, wy, wz, ax, ay, az
+    # 2. Parse 6 measurement fields
     vals = [np.nan] * 6
     if len(parts) < 7:
         flags |= ParserFlags.TRUNCATED
@@ -152,8 +158,12 @@ def parse_imu_line(
             vals[k] = np.nan
             flags |= ParserFlags.NAN_OR_INF
 
-    omega = np.array(vals[0:3], dtype=np.float64)
-    acc = np.array(vals[3:6], dtype=np.float64)
+    if official_format:
+        acc = np.array(vals[0:3], dtype=np.float64)
+        omega = np.array(vals[3:6], dtype=np.float64)
+    else:
+        omega = np.array(vals[0:3], dtype=np.float64)
+        acc = np.array(vals[3:6], dtype=np.float64)
 
     # 3. Check bounds and all zeros if all finite
     if not (flags & ParserFlags.NAN_OR_INF):
@@ -181,6 +191,7 @@ class IMUStream(Iterator[Tuple[int, np.ndarray, np.ndarray, bool, int]]):
         lines_or_file: Union[str, Path, Iterable[str], TextIO],
         params: Optional[Dict[str, Any]] = None,
         stats: Optional[Dict[str, int]] = None,
+        official_format: Optional[bool] = None,
     ) -> None:
         self.params = load_params(params)
         self.stats = stats
@@ -206,6 +217,61 @@ class IMUStream(Iterator[Tuple[int, np.ndarray, np.ndarray, bool, int]]):
         else:
             raise TypeError(f"Unsupported input type for parse_imu_stream: {type(lines_or_file)}")
 
+        self.official_format: bool = False
+        self._init_column_format(official_format)
+
+    def _init_column_format(self, official_format: Optional[bool]) -> None:
+        peeked: List[str] = []
+        detected = False
+        for raw_line in self._line_iterator:
+            s = raw_line.strip()
+            if not s:
+                peeked.append(raw_line)
+                continue
+
+            clean = s.lstrip("#").strip()
+            parts = [p.strip() for p in (clean.split(",") if "," in clean else clean.split())]
+            first_field = parts[0] if parts else ""
+            is_header = False
+            try:
+                float(first_field)
+                is_header = False
+            except ValueError:
+                is_header = True
+
+            if is_header:
+                cols_1_3 = [p.lower() for p in parts[1:4]] if len(parts) >= 4 else [p.lower() for p in parts[1:]]
+                targets = ("ax", "accel_x", "a_x", "accel")
+                if any(any(t == c or c.startswith(t) or t in c for t in targets) for c in cols_1_3):
+                    detected = True
+                    # Consume official header
+                    break
+                else:
+                    if not s.startswith("#"):
+                        # Non-comment header (e.g. text header) -> consume it
+                        detected = False
+                        break
+                    else:
+                        # Comment line starting with '#' -> keep in peeked
+                        peeked.append(raw_line)
+                        if any("w_" in c or "gyro" in c or "gx" in c for c in cols_1_3):
+                            detected = False
+                            break
+                        continue
+            else:
+                # Numeric first token -> data row
+                peeked.append(raw_line)
+                detected = False
+                break
+
+        if official_format is not None:
+            self.official_format = bool(official_format)
+        else:
+            self.official_format = detected
+
+        if peeked:
+            self._line_iterator = itertools.chain(peeked, self._line_iterator)
+
     @property
     def skipped_count(self) -> int:
         """Alias for skipped_timestamp_count."""
@@ -223,7 +289,9 @@ class IMUStream(Iterator[Tuple[int, np.ndarray, np.ndarray, bool, int]]):
             if is_comment_or_blank(raw_line):
                 continue
 
-            t_ns, omega, acc, is_valid, flags = parse_imu_line(raw_line, self.params)
+            t_ns, omega, acc, is_valid, flags = parse_imu_line(
+                raw_line, self.params, official_format=self.official_format
+            )
 
             # Skip rows with missing or unparseable timestamps (SPEC §12.8)
             if t_ns is None:
@@ -263,6 +331,7 @@ def parse_imu_stream(
     lines_or_file: Union[str, Path, Iterable[str], TextIO],
     params: Optional[Dict[str, Any]] = None,
     stats: Optional[Dict[str, int]] = None,
+    official_format: Optional[bool] = None,
 ) -> IMUStream:
     """Create streaming IMU CSV iterator yielding (t_ns, omega, acc, is_valid, flags)."""
-    return IMUStream(lines_or_file, params=params, stats=stats)
+    return IMUStream(lines_or_file, params=params, stats=stats, official_format=official_format)

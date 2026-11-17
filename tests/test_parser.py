@@ -295,3 +295,64 @@ def test_load_params():
     assert "invalid_acc_max" in params
     assert params["invalid_gyro_max"] == pytest.approx(35.0)
     assert params["invalid_acc_max"] == pytest.approx(160.0)
+
+
+def test_official_column_order_auto_detect():
+    """Verify auto-detection of official degrade_imu.py format (ax, ay, az, gx, gy, gz)."""
+    csv_text = (
+        "timestamp,ax,ay,az,gx,gy,gz\n"
+        "1000000000,0.1,0.2,0.3,0.01,0.02,0.03\n"
+    )
+    stream = parse_imu_stream(csv_text)
+    rows = list(stream)
+    assert len(rows) == 1
+    t_ns, omega, acc, is_valid, flags = rows[0]
+    assert t_ns == 1000000000
+    assert is_valid is True
+    np.testing.assert_allclose(omega, [0.01, 0.02, 0.03], atol=1e-12)
+    np.testing.assert_allclose(acc, [0.1, 0.2, 0.3], atol=1e-12)
+
+
+def test_official_zeros_flagged_invalid():
+    """Verify that a row with all zeros in official format is flagged invalid with ALL_ZEROS."""
+    csv_text = (
+        "timestamp,ax,ay,az,gx,gy,gz\n"
+        "1000000000,0.0,0.0,0.0,0.0,0.0,0.0\n"
+    )
+    stream = parse_imu_stream(csv_text)
+    rows = list(stream)
+    assert len(rows) == 1
+    t_ns, omega, acc, is_valid, flags = rows[0]
+    assert t_ns == 1000000000
+    assert is_valid is False
+    assert (flags & FLAG_ALL_ZEROS) != 0
+
+
+def test_official_column_order_override_and_accel_x_header():
+    """Verify official format with accel_x header and manual override flags."""
+    csv_text = (
+        "timestamp,accel_x,accel_y,accel_z,gyro_x,gyro_y,gyro_z\n"
+        "1000000000,1.0,2.0,3.0,0.1,0.2,0.3\n"
+    )
+    stream = parse_imu_stream(csv_text)
+    assert stream.official_format is True
+    row = next(stream)
+    np.testing.assert_allclose(row[1], [0.1, 0.2, 0.3])
+    np.testing.assert_allclose(row[2], [1.0, 2.0, 3.0])
+
+    # Headerless stream defaults to official_format=False
+    headerless_csv = "1000000000,0.1,0.2,0.3,1.0,2.0,3.0\n"
+    stream_hl = parse_imu_stream(headerless_csv)
+    assert stream_hl.official_format is False
+    row_hl = next(stream_hl)
+    np.testing.assert_allclose(row_hl[1], [0.1, 0.2, 0.3])
+    np.testing.assert_allclose(row_hl[2], [1.0, 2.0, 3.0])
+
+    # Manual override forces swap even on headerless
+    stream_override = parse_imu_stream(headerless_csv, official_format=True)
+    assert stream_override.official_format is True
+    row_ov = next(stream_override)
+    np.testing.assert_allclose(row_ov[1], [1.0, 2.0, 3.0])
+    np.testing.assert_allclose(row_ov[2], [0.1, 0.2, 0.3])
+
+
