@@ -24,8 +24,9 @@ Output format (SPEC §6.3):
 """
 
 import math
+import tempfile
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 import numpy as np
 
 from tools.validate_trajectory import resolve_imu_csv
@@ -63,22 +64,77 @@ from src.ref.blind import BlindPredictor
 from src.ref.parser import parse_imu_stream
 
 
-class TrajectoryCollector:
-    """Collects poses from Pass 1 for Pass 2 offline filtering."""
+class ChunkedTrajectory:
+    """Collects poses from Pass 1 using bounded-memory chunks and temporary file backing for Pass 2 offline filtering."""
 
-    def __init__(self):
-        self.rows: List[Tuple[int, np.ndarray, np.ndarray]] = []
+    def __init__(self, chunk_size: int = 8192):
+        self.chunk_size = int(chunk_size)
+        self._count = 0
+        self._idx = 0
+        self._t_buf = np.empty(self.chunk_size, dtype=np.int64)
+        self._p_buf = np.empty((self.chunk_size, 3), dtype=np.float64)
+        self._q_buf = np.empty((self.chunk_size, 4), dtype=np.float64)
+        self._f_t = tempfile.NamedTemporaryFile()
+        self._f_p = tempfile.NamedTemporaryFile()
+        self._f_q = tempfile.NamedTemporaryFile()
+
+    def push(self, t_ns: int, p: Union[np.ndarray, list], q: Union[np.ndarray, list]) -> None:
+        self._t_buf[self._idx] = int(t_ns)
+        self._p_buf[self._idx] = p
+        self._q_buf[self._idx] = q
+        self._idx += 1
+        self._count += 1
+        if self._idx == self.chunk_size:
+            self._flush_chunk()
 
     def write_pose(
         self, t_ns: int, px: float, py: float, pz: float, qx: float, qy: float, qz: float, qw: float
     ) -> None:
-        self.rows.append(
-            (
-                int(t_ns),
-                np.array([px, py, pz], dtype=np.float64),
-                np.array([qx, qy, qz, qw], dtype=np.float64),
+        self._t_buf[self._idx] = int(t_ns)
+        self._p_buf[self._idx, 0] = px
+        self._p_buf[self._idx, 1] = py
+        self._p_buf[self._idx, 2] = pz
+        self._q_buf[self._idx, 0] = qx
+        self._q_buf[self._idx, 1] = qy
+        self._q_buf[self._idx, 2] = qz
+        self._q_buf[self._idx, 3] = qw
+        self._idx += 1
+        self._count += 1
+        if self._idx == self.chunk_size:
+            self._flush_chunk()
+
+    def _flush_chunk(self) -> None:
+        if self._idx > 0:
+            self._f_t.write(self._t_buf[:self._idx].tobytes())
+            self._f_p.write(self._p_buf[:self._idx].tobytes())
+            self._f_q.write(self._q_buf[:self._idx].tobytes())
+            self._idx = 0
+
+    def to_arrays(self) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        self._flush_chunk()
+        self._f_t.flush()
+        self._f_p.flush()
+        self._f_q.flush()
+        # Free buffer memory
+        self._t_buf = None
+        self._p_buf = None
+        self._q_buf = None
+
+        if self._count == 0:
+            return (
+                np.empty(0, dtype=np.int64),
+                np.empty((0, 3), dtype=np.float64),
+                np.empty((0, 4), dtype=np.float64),
             )
-        )
+
+        t_arr = np.memmap(self._f_t, dtype=np.int64, mode="r+", shape=(self._count,))
+        p_arr = np.memmap(self._f_p, dtype=np.float64, mode="r+", shape=(self._count, 3))
+        q_arr = np.memmap(self._f_q, dtype=np.float64, mode="r+", shape=(self._count, 4))
+        return t_arr, p_arr, q_arr
+
+
+# Backward-compatible alias
+TrajectoryCollector = ChunkedTrajectory
 
 
 def apply_bounded_workspace_filter(
@@ -88,7 +144,7 @@ def apply_bounded_workspace_filter(
     if count == 0:
         return pos.copy()
 
-    pos_out = pos.copy()
+    pos_out = np.array(pos, dtype=np.float64, copy=True)
     invalid_mask = ~np.isfinite(pos_out)
     if np.any(invalid_mask):
         pos_out[invalid_mask] = 0.0
@@ -109,7 +165,6 @@ def apply_bounded_workspace_filter(
     a1 = 2.0 * (K * K - 1.0) / norm
     a2 = (1.0 - math.sqrt(2.0) * K + K * K) / norm
 
-    pos_out = pos.copy()
     for c in range(3):
         # Forward pass
         d1 = (b1 + b2 - a1 - a2) * pos_out[0, c]
@@ -285,7 +340,7 @@ def run_eskf_full(
     with open(out_path, "w", encoding="utf-8") as f_out:
         f_out.write("# timestamp tx ty tz qx qy qz qw\n")
 
-        collector = TrajectoryCollector()
+        collector = ChunkedTrajectory()
 
         def process_full_step(t_curr: int, omega_curr: np.ndarray, acc_curr: np.ndarray) -> None:
             nonlocal state, P, prev_t_ns, was_in_gap
@@ -486,8 +541,8 @@ def run_eskf_full(
 
         # Pass 2: Offline drift-aware bounded-workspace filter
         dt_nom = float(gap_handler.dt_nom if gap_handler.dt_nom > 0.0 else 0.005)
-        stream_rows = list(collector.rows)
-        stream_count = len(stream_rows)
+        t_ns_arr, pos_arr, quat_arr = collector.to_arrays()
+        stream_count = len(t_ns_arr)
 
         # Determine if IMU failure occurred during the stream
         active_count = stream_count
@@ -496,17 +551,13 @@ def run_eskf_full(
 
         if blind_predictor.is_failed and stream_count > 0:
             t_fail = blind_predictor.failure_time_ns
-            for i, r in enumerate(stream_rows):
-                if r[0] >= t_fail:
+            for i in range(stream_count):
+                if t_ns_arr[i] >= t_fail:
                     active_count = i
                     failed_in_stream = True
                     if i > 0:
-                        p_raw_split = stream_rows[i - 1][1].copy()
+                        p_raw_split = pos_arr[i - 1].copy()
                     break
-
-        pos_arr = np.array([r[1] for r in stream_rows], dtype=np.float64)
-        t_ns_arr = [r[0] for r in stream_rows]
-        quat_arr = np.array([r[2] for r in stream_rows], dtype=np.float64)
 
         if bool(cfg.get("enable_two_pass_filter", True)) and active_count > 0:
             cutoff_T = float(cfg.get("two_pass_cutoff_period", 45.0))
@@ -518,7 +569,7 @@ def run_eskf_full(
             pos_arr[active_count:] += delta_align
 
         for i in range(len(t_ns_arr)):
-            t_ns_i = t_ns_arr[i]
+            t_ns_i = int(t_ns_arr[i])
             sec = t_ns_i // 1_000_000_000
             nsec = t_ns_i % 1_000_000_000
             p_i = pos_arr[i]
