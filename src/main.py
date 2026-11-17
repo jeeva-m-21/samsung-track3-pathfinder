@@ -18,6 +18,7 @@ Fully self-contained:
 """
 
 import argparse
+import collections
 import io
 import math
 import os
@@ -277,19 +278,25 @@ def load_imu_arrays(input_path: str):
         s = line.strip()
         if not s or s.startswith("#"):
             continue
-        parts = s.split(",")
-        if len(parts) < 7:
+        parts = [p.strip() for p in (s.split(",") if "," in s else s.split())]
+        if not parts or not parts[0]:
             continue
         try:
-            vals = (
-                float(parts[0]),
-                float(parts[1]), float(parts[2]), float(parts[3]),
-                float(parts[4]), float(parts[5]), float(parts[6]),
-            )
-            data_rows.append(vals)
-            ts_strs.append(parts[0].strip())
+            t_val = float(parts[0])
         except ValueError:
             continue
+
+        row_vals = [np.nan] * 6
+        for k in range(6):
+            if k + 1 < len(parts):
+                try:
+                    v = float(parts[k + 1])
+                    if math.isfinite(v):
+                        row_vals[k] = v
+                except ValueError:
+                    pass
+        data_rows.append((t_val, *row_vals))
+        ts_strs.append(parts[0])
 
     n = len(data_rows)
     if n == 0:
@@ -301,18 +308,20 @@ def load_imu_arrays(input_path: str):
     c2 = arr[:, 4:7]
 
     # Timestamp scale detection (nanoseconds vs seconds)
-    diffs = np.diff(ts_raw)
-    pos_diffs = diffs[diffs > 0]
-    med_dt = float(np.median(pos_diffs)) if len(pos_diffs) > 0 else 0.005
-    if med_dt < 1.0:
-        ts_scale = 1.0
-    elif med_dt < 1e3:
-        ts_scale = 1e-3
-    elif med_dt < 1e6:
-        ts_scale = 1e-6
-    else:
+    first_token = ts_strs[0]
+    if "." not in first_token and abs(ts_raw[0]) >= 1e8:
         ts_scale = 1e-9
-    t_s = ts_raw * ts_scale
+    else:
+        ts_scale = 1.0
+
+    if ts_scale == 1e-9:
+        try:
+            t0_int = int(ts_strs[0])
+            t_s = np.array([float(int(s) - t0_int) * 1e-9 for s in ts_strs], dtype=np.float64)
+        except ValueError:
+            t_s = (ts_raw - ts_raw[0]) * 1e-9
+    else:
+        t_s = ts_raw * ts_scale
 
     # Column order auto-detection: accel-first (degrade_imu.py) vs gyro-first (EuRoC)
     gyro_first = False
@@ -613,10 +622,10 @@ class SparseESKF:
         self.has_prev_raw = False
         self.recover_counter = 0
 
-        self.win_w = []
-        self.win_a_norm = []
-        self.ring = []
         self.ring_cap = params.get("ring_buffer_size", 256)
+        self.win_w = collections.deque(maxlen=50)
+        self.win_a_norm = collections.deque(maxlen=50)
+        self.ring = collections.deque(maxlen=self.ring_cap)
 
         self.monitor = DegradationMonitor(
             alpha=params.get("monitor_alpha", 0.01),
@@ -663,44 +672,57 @@ class SparseESKF:
             anorms.append(math.sqrt(ax * ax + ay * ay + az * az))
             cnt += 1
 
+        motion_detected = False
         if cnt < 2:
-            self.q = (1.0, 0.0, 0.0, 0.0)
-            self.g_mag = G_STD
-            self._set_p0(False)
-            return
-
-        inv_c = 1.0 / cnt
-        w_bar = (wx_sum * inv_c, wy_sum * inv_c, wz_sum * inv_c)
-        a_bar = (ax_sum * inv_c, ay_sum * inv_c, az_sum * inv_c)
-
-        w_var = sum(
-            (g[0] - w_bar[0]) ** 2 + (g[1] - w_bar[1]) ** 2 + (g[2] - w_bar[2]) ** 2
-            for g in ws
-        ) / (3.0 * cnt)
-        a_mean_n = sum(anorms) * inv_c
-        a_var = sum((an - a_mean_n) ** 2 for an in anorms) / cnt
-        sigma_w = math.sqrt(w_var)
-        sigma_a = math.sqrt(a_var)
-        w_bar_mag = math.sqrt(w_bar[0] ** 2 + w_bar[1] ** 2 + w_bar[2] ** 2)
-
-        motion_detected = (
-            (sigma_w > self.params["motion_detect_gyro_std"]) or
-            (sigma_a > self.params["motion_detect_acc_std"]) or
-            (w_bar_mag > 0.20)
-        )
-
-        # Reference accel for initial tilt quaternion
-        if motion_detected and first_valid_idx >= 0:
-            a_ref = (float(acc_arr[first_valid_idx, 0]),
-                     float(acc_arr[first_valid_idx, 1]),
-                     float(acc_arr[first_valid_idx, 2]))
-            self.bg = [0.0, 0.0, 0.0]
-            self.g_mag = G_STD
+            if cnt == 1 and first_valid_idx >= 0:
+                a_ref = (float(acc_arr[first_valid_idx, 0]),
+                         float(acc_arr[first_valid_idx, 1]),
+                         float(acc_arr[first_valid_idx, 2]))
+                self.bg = [0.0, 0.0, 0.0]
+                self.g_mag = G_STD
+            else:
+                self.q = (1.0, 0.0, 0.0, 0.0)
+                self.g_mag = G_STD
+                self._set_p0(False)
+                return
         else:
-            a_ref = a_bar
-            self.bg = [w_bar[0], w_bar[1], w_bar[2]]
-            a_norm = math.sqrt(a_ref[0] ** 2 + a_ref[1] ** 2 + a_ref[2] ** 2)
-            self.g_mag = max(self.params["g_mag_clamp_min"], min(self.params["g_mag_clamp_max"], a_norm))
+            inv_c = 1.0 / cnt
+            w_bar = (wx_sum * inv_c, wy_sum * inv_c, wz_sum * inv_c)
+            a_bar = (ax_sum * inv_c, ay_sum * inv_c, az_sum * inv_c)
+
+            w_var = sum(
+                (g[0] - w_bar[0]) ** 2 + (g[1] - w_bar[1]) ** 2 + (g[2] - w_bar[2]) ** 2
+                for g in ws
+            ) / (3.0 * cnt)
+            a_mean_n = sum(anorms) * inv_c
+            a_var = sum((an - a_mean_n) ** 2 for an in anorms) / cnt
+            sigma_w = math.sqrt(w_var)
+            sigma_a = math.sqrt(a_var)
+            w_bar_mag = math.sqrt(w_bar[0] ** 2 + w_bar[1] ** 2 + w_bar[2] ** 2)
+
+            motion_detected = (
+                (sigma_w > self.params["motion_detect_gyro_std"]) or
+                (sigma_a > self.params["motion_detect_acc_std"]) or
+                (w_bar_mag > 0.20)
+            )
+
+            # Reference accel for initial tilt quaternion
+            if motion_detected and first_valid_idx >= 0:
+                a_ref = (float(acc_arr[first_valid_idx, 0]),
+                         float(acc_arr[first_valid_idx, 1]),
+                         float(acc_arr[first_valid_idx, 2]))
+                self.bg = [0.0, 0.0, 0.0]
+                self.g_mag = G_STD
+            else:
+                a_ref = a_bar
+                self.bg = [w_bar[0], w_bar[1], w_bar[2]]
+                a_norm = math.sqrt(a_ref[0] ** 2 + a_ref[1] ** 2 + a_ref[2] ** 2)
+                self.g_mag = max(self.params["g_mag_clamp_min"], min(self.params["g_mag_clamp_max"], a_norm))
+
+            scale_g = (sigma_w / 0.020) if sigma_w > 1e-5 else 0.2
+            scale_a = (sigma_a / 0.300) if sigma_a > 1e-5 else 0.2
+            self.q_scale_g = max(0.2, min(1.0, scale_g))
+            self.q_scale_a = max(0.2, min(1.0, scale_a))
 
         a_ref_n = math.sqrt(a_ref[0] ** 2 + a_ref[1] ** 2 + a_ref[2] ** 2)
         if a_ref_n < 1e-6:
@@ -716,12 +738,6 @@ class SparseESKF:
             qz = 0.0
             inv_qn = 1.0 / math.sqrt(qw * qw + qx * qx + qy * qy)
             self.q = (qw * inv_qn, qx * inv_qn, qy * inv_qn, 0.0)
-
-        # Initial noise scaling factors matching C++
-        scale_g = (sigma_w / 0.020) if sigma_w > 1e-5 else 0.2
-        scale_a = (sigma_a / 0.300) if sigma_a > 1e-5 else 0.2
-        self.q_scale_g = max(0.2, min(1.0, scale_g))
-        self.q_scale_a = max(0.2, min(1.0, scale_a))
 
         self.ba = [0.0, 0.0, 0.0]
         self.p = [0.0, 0.0, 0.0]
@@ -892,9 +908,6 @@ class SparseESKF:
         # 3. Stationary Detection (ZUPT)
         self.win_w.append(w_mag)
         self.win_a_norm.append(a_norm)
-        if len(self.win_w) > 50:
-            self.win_w.pop(0)
-            self.win_a_norm.pop(0)
 
         is_zupt = False
         if len(self.win_w) >= 20 and quality >= pr.get("zupt_min_quality", 0.30):
@@ -920,7 +933,8 @@ class SparseESKF:
             self._update_block3(
                 3, -self.v[0], -self.v[1], -self.v[2],
                 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0,
-                r_z, r_z, r_z, gate_threshold=1e9, clear_pv=False
+                r_z, r_z, r_z, gate_threshold=1e9, clear_pv=False,
+                m_dim=3, nu=pr["nu_vel"]
             )
         elif is_flight and pr["enable_rotor_drag"]:
             if w_mag <= 2.5 and (3.0 <= a_norm <= 35.0):
@@ -938,7 +952,8 @@ class SparseESKF:
                     -kd * r00, -kd * r10, -kd * r20,
                     -kd * r01, -kd * r11, -kd * r21,
                     0.0, 0.0, 0.0,
-                    rd, rd, 1e8, gate_threshold=pr.get("rotor_drag_gate", 12.0), clear_pv=True
+                    rd, rd, 1e8, gate_threshold=pr.get("rotor_drag_gate", 12.0), clear_pv=True,
+                    m_dim=2, nu=pr["nu_vel"]
                 )
         elif is_pedestrian and pr["enable_pedestrian_prior"]:
             r00, r01, r02, r10, r11, r12, r20, r21, r22 = quat_to_rot(self.q)
@@ -951,7 +966,8 @@ class SparseESKF:
                 r01, r11, r21,
                 0.0, 0.0, 1.0,
                 0.0, 0.0, 0.0,
-                rlat, rvert, 1e8, gate_threshold=pr.get("ped_gate_threshold", 9.0), clear_pv=True
+                rlat, rvert, 1e8, gate_threshold=pr.get("ped_gate_threshold", 9.0), clear_pv=True,
+                m_dim=2, nu=pr["nu_vel"]
             )
 
         # 5. Tilt update
@@ -978,7 +994,8 @@ class SparseESKF:
                 0.0, -hz, hy,
                 hz, 0.0, -hx,
                 -hy, hx, 0.0,
-                base_rt, base_rt, base_rt, gate_threshold=1e9, clear_pv=False
+                base_rt, base_rt, base_rt, gate_threshold=1e9, clear_pv=False,
+                m_dim=3, nu=pr["nu_tilt"]
             )
 
         # 6. Velocity Bounding
@@ -991,7 +1008,8 @@ class SparseESKF:
                 self._update_block3(
                     3, vx * sc, vy * sc, vz * sc,
                     1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0,
-                    rv, rv, rv, gate_threshold=1e9, clear_pv=True
+                    rv, rv, rv, gate_threshold=1e9, clear_pv=True,
+                    m_dim=3, nu=pr["nu_vel"]
                 )
 
         # 7. Reliable state buffering for blind window
@@ -1139,7 +1157,8 @@ class SparseESKF:
         h10: float, h11: float, h12: float,
         h20: float, h21: float, h22: float,
         r0: float, r1: float, r2: float,
-        gate_threshold: float = 1e9, clear_pv: bool = False
+        gate_threshold: float = 1e9, clear_pv: bool = False,
+        m_dim: int = 3, nu: float = 8.0
     ):
         P = self.P
         if clear_pv:
@@ -1182,8 +1201,32 @@ class SparseESKF:
         t2 = si20 * y0 + si21 * y1 + si22 * y2
         d2 = y0 * t0 + y1 * t1 + y2 * t2
 
-        if not math.isfinite(d2) or d2 > gate_threshold:
+        if not math.isfinite(d2):
             return
+
+        if self.params.get("enable_student_t", False):
+            if d2 > 1e6:
+                return
+            scale = (nu + d2) / (nu + float(m_dim))
+            if scale < 1.0:
+                scale = 1.0
+            elif scale > 100.0:
+                scale = 100.0
+            if scale > 1.0:
+                r0 *= scale
+                r1 *= scale
+                if m_dim == 3:
+                    r2 *= scale
+                s00 = hp0[b0] * h00 + hp0[b1] * h01 + hp0[b2] * h02 + r0
+                s11 = hp1[b0] * h10 + hp1[b1] * h11 + hp1[b2] * h12 + r1
+                s22 = hp2[b0] * h20 + hp2[b1] * h21 + hp2[b2] * h22 + r2
+                sinv = inv3x3(s00, s01, s02, s10, s11, s12, s20, s21, s22)
+                if sinv is None:
+                    return
+                si00, si01, si02, si10, si11, si12, si20, si21, si22 = sinv
+        else:
+            if d2 > gate_threshold:
+                return
 
         k0 = self.k0
         k1 = self.k1
@@ -1281,7 +1324,7 @@ def make_blind_anchor(eskf: SparseESKF, params: dict):
             eskf.get_w_walk(),
         )
     cnt = min(len(ring), max(1, int(round(params["blind_window_s"] * 200.0))))
-    sub = ring[-cnt:]
+    sub = list(ring)[-cnt:]
     last = sub[-1]
     pf = (last[0], last[1], last[2])
     qf = (last[6], last[7], last[8], last[9])
@@ -1350,13 +1393,132 @@ def eval_blind_pose(tau: float, anchor, params: dict):
 # Pipeline Orchestrator (Full Stream & Formatting)
 # ---------------------------------------------------------------------------
 
-def run_pipeline(input_path: str, output_path: str, params: dict = None, ablation: str = "eskf_full"):
+def run_pipeline(input_path: str, output_path: str, params: dict = None, ablation: str = "eskf_full", append_blind: bool = False):
     pr = dict(DEFAULT_PARAMS)
     if params is not None:
         pr.update(params)
 
+    if ablation == "naive":
+        pr["enable_rotor_drag"] = False
+        pr["enable_pedestrian_prior"] = False
+        pr["enable_velocity_bounding"] = False
+        pr["enable_tilt_update"] = False
+        pr["enable_adaptive_q"] = False
+        pr["enable_spike_filter"] = False
+        pr["enable_student_t"] = False
+    elif ablation == "mahony":
+        pr["enable_rotor_drag"] = False
+        pr["enable_pedestrian_prior"] = False
+        pr["enable_velocity_bounding"] = False
+        pr["enable_adaptive_q"] = False
+        pr["enable_spike_filter"] = False
+    elif ablation == "eskf_basic":
+        pr["enable_adaptive_q"] = False
+        pr["enable_spike_filter"] = False
+        pr["enable_rotor_drag"] = False
+        pr["enable_pedestrian_prior"] = False
+        pr["enable_velocity_bounding"] = False
+
     ts_strs, t_s, acc, gyr, ts_scale = load_imu_arrays(input_path)
     n = len(t_s)
+
+    if ablation == "naive":
+        # Pure naive dead-reckoning strapdown baseline (SPEC §11.5)
+        out_p = np.zeros((n, 3), dtype=np.float64)
+        out_q = np.zeros((n, 4), dtype=np.float64)
+        init_mask = (t_s - t_s[0]) <= 1.0
+        if np.sum(init_mask) < 2:
+            init_mask[: min(n, 20)] = True
+        a_mean = np.mean(acc[init_mask], axis=0)
+        g_raw = float(np.linalg.norm(a_mean))
+        g_mag = float(np.clip(g_raw, 9.0, 10.5))
+        v_dir = a_mean / (g_raw if g_raw > 1e-6 else 1.0)
+        cos_th = float(v_dir[2])
+        if cos_th > 0.999999:
+            q0 = (1.0, 0.0, 0.0, 0.0)
+        elif cos_th < -0.999999:
+            q0 = (0.0, 1.0, 0.0, 0.0)
+        else:
+            ax = v_dir[1]
+            ay = -v_dir[0]
+            an = math.sqrt(ax * ax + ay * ay)
+            if an > 1e-9:
+                ax /= an
+                ay /= an
+                ang = math.acos(max(-1.0, min(1.0, cos_th)))
+                s = math.sin(0.5 * ang)
+                q0 = (math.cos(0.5 * ang), ax * s, ay * s, 0.0)
+            else:
+                q0 = (1.0, 0.0, 0.0, 0.0)
+        g_w = (0.0, 0.0, -g_mag)
+
+        p = [0.0, 0.0, 0.0]
+        v = [0.0, 0.0, 0.0]
+        q = q0
+        for k in range(n):
+            if k > 0:
+                dt = t_s[k] - t_s[k - 1]
+            else:
+                dt = 0.0
+            ak = acc[k]
+            wk = gyr[k]
+            if 0.0 < dt < 10.0 and np.all(np.isfinite(ak)) and np.all(np.isfinite(wk)):
+                dq = rotvec_to_quat(wk[0] * dt, wk[1] * dt, wk[2] * dt)
+                q_new = quat_norm_align(quat_mul(q, dq), q)
+                r00, r01, r02, r10, r11, r12, r20, r21, r22 = quat_to_rot(q)
+                awx = r00 * ak[0] + r01 * ak[1] + r02 * ak[2] + g_w[0]
+                awy = r10 * ak[0] + r11 * ak[1] + r12 * ak[2] + g_w[1]
+                awz = r20 * ak[0] + r21 * ak[1] + r22 * ak[2] + g_w[2]
+                p[0] += v[0] * dt + 0.5 * awx * dt * dt
+                p[1] += v[1] * dt + 0.5 * awy * dt * dt
+                p[2] += v[2] * dt + 0.5 * awz * dt * dt
+                v[0] += awx * dt
+                v[1] += awy * dt
+                v[2] += awz * dt
+                q = q_new
+            out_p[k] = p
+            out_q[k] = q
+
+        out_dir = os.path.dirname(os.path.abspath(output_path))
+        if out_dir:
+            os.makedirs(out_dir, exist_ok=True)
+        with open(output_path, "w", encoding="utf-8") as f:
+            f.write("# timestamp tx ty tz qx qy qz qw\n")
+            for k in range(n):
+                ts_str = ts_strs[k]
+                if ts_scale == 1e-9:
+                    try:
+                        t_int = int(ts_str)
+                        sec = t_int // 1_000_000_000
+                        nsec = t_int % 1_000_000_000
+                        out_t = f"{sec}.{nsec:09d}"
+                    except ValueError:
+                        out_t = f"{float(ts_str) * 1e-9:.9f}"
+                else:
+                    out_t = f"{float(ts_str):.9f}"
+                pos = out_p[k]
+                quat = out_q[k]
+                f.write(f"{out_t} {pos[0]:.9f} {pos[1]:.9f} {pos[2]:.9f} {quat[1]:.9f} {quat[2]:.9f} {quat[3]:.9f} {quat[0]:.9f}\n")
+            if append_blind and n > 0:
+                dt_b = 0.005
+                dt_b_ns = 5_000_000
+                n_blind = int(round(5.0 / dt_b))
+                try:
+                    last_t_ns = int(ts_strs[-1]) if ts_scale == 1e-9 else int(round(float(ts_strs[-1]) * 1e9))
+                except Exception:
+                    last_t_ns = 0
+                for step in range(1, n_blind + 1):
+                    tau = step * dt_b
+                    pb = (p[0] + v[0] * tau, p[1] + v[1] * tau, p[2] + v[2] * tau)
+                    if ts_scale == 1e-9 and last_t_ns > 0:
+                        t_step_ns = last_t_ns + step * dt_b_ns
+                        sec = t_step_ns // 1_000_000_000
+                        nsec = t_step_ns % 1_000_000_000
+                        out_t = f"{sec}.{nsec:09d}"
+                    else:
+                        out_t = f"{float(ts_strs[-1]) + tau:.9f}"
+                    f.write(f"{out_t} {pb[0]:.9f} {pb[1]:.9f} {pb[2]:.9f} {q[1]:.9f} {q[2]:.9f} {q[3]:.9f} {q[0]:.9f}\n")
+        return
     acc_clean, gyr_clean, dup_mask, invalid_mask, fail_start, noise_mult, dt_nom = preprocess_offline(
         t_s, acc, gyr, pr
     )
@@ -1377,10 +1539,12 @@ def run_pipeline(input_path: str, output_path: str, params: dict = None, ablatio
     q_last = eskf.q
 
     in_gap = False
-    gap_start_idx = 0
+    gap_start_idx = -1
     p_gap_start = p_last
     prev_t = t_s[0]
     wx_s = wy_s = wz_s = 0.0
+    last_valid_a = (float(acc_clean[0, 0]), float(acc_clean[0, 1]), float(acc_clean[0, 2]))
+    last_valid_g = (float(gyr_clean[0, 0]), float(gyr_clean[0, 1]), float(gyr_clean[0, 2]))
 
     active_limit = min(n, fail_start)
     for k in range(active_limit):
@@ -1391,7 +1555,10 @@ def run_pipeline(input_path: str, output_path: str, params: dict = None, ablatio
             continue
 
         if invalid_mask[k]:
-            in_gap = True
+            if not in_gap:
+                in_gap = True
+                gap_start_idx = k
+                p_gap_start = p_last
             dt_step = max(1e-4, tk - prev_t)
             prev_t = tk
             eskf.propagate_gap(dt_step, dt_nom, wx_s, wy_s, wz_s)
@@ -1401,19 +1568,54 @@ def run_pipeline(input_path: str, output_path: str, params: dict = None, ablatio
             out_q[k] = q_last
             continue
 
+        # If returning from an invalid_mask segment, apply Hermite bridge
+        if in_gap and gap_start_idx >= 0 and k > gap_start_idx and (k - gap_start_idx) < 200:
+            p_rec = p_last
+            delta_bridge = np.array(p_rec) - np.array(p_gap_start)
+            g_len = k - gap_start_idx
+            for b_i in range(gap_start_idx, k):
+                alpha = float(b_i - gap_start_idx + 1) / float(g_len + 1)
+                s_herm = 3.0 * alpha * alpha - 2.0 * alpha * alpha * alpha
+                out_p[b_i] += delta_bridge * s_herm
+            in_gap = False
+            gap_start_idx = -1
+
         dt = tk - prev_t
         prev_t = tk
-        if dt > 2.5 * dt_nom:
-            in_gap = True
-            gap_start_idx = k
-            p_gap_start = p_last
-            eskf.propagate_gap(dt, dt_nom, wx_s, wy_s, wz_s)
 
         ax, ay, az = float(acc_clean[k, 0]), float(acc_clean[k, 1]), float(acc_clean[k, 2])
         gx, gy, gz = float(gyr_clean[k, 0]), float(gyr_clean[k, 1]), float(gyr_clean[k, 2])
         nm = float(noise_mult[k])
         t_el = tk - t0
-        eskf.step(min(dt, 0.05), ax, ay, az, gx, gy, gz, nm, t_el)
+
+        if dt > 2.5 * dt_nom:
+            if dt <= 0.35:
+                # degrade_imu.py short missing bursts (25 - 250 ms):
+                # Linearly interpolate (acc, gyr) across virtual sub-steps
+                n_virt = max(1, int(round(dt / dt_nom)))
+                dt_v = dt / n_virt
+                a0x, a0y, a0z = last_valid_a
+                g0x, g0y, g0z = last_valid_g
+                for step_i in range(1, n_virt):
+                    alpha = float(step_i) / float(n_virt)
+                    av_x = (1.0 - alpha) * a0x + alpha * ax
+                    av_y = (1.0 - alpha) * a0y + alpha * ay
+                    av_z = (1.0 - alpha) * a0z + alpha * az
+                    gv_x = (1.0 - alpha) * g0x + alpha * gx
+                    gv_y = (1.0 - alpha) * g0y + alpha * gy
+                    gv_z = (1.0 - alpha) * g0z + alpha * gz
+                    t_sub = (tk - dt) + step_i * dt_v - t0
+                    eskf.step(dt_v, av_x, av_y, av_z, gv_x, gv_y, gv_z, nm, t_sub)
+                eskf.step(dt_v, ax, ay, az, gx, gy, gz, nm, t_el)
+            else:
+                # Long blackout gap (> 0.35 s):
+                eskf.propagate_gap(dt - dt_nom, dt_nom, wx_s, wy_s, wz_s)
+                eskf.step(dt_nom, ax, ay, az, gx, gy, gz, nm, t_el)
+        else:
+            eskf.step(min(dt, 0.05), ax, ay, az, gx, gy, gz, nm, t_el)
+
+        last_valid_a = (ax, ay, az)
+        last_valid_g = (gx, gy, gz)
 
         wx_s = 0.95 * wx_s + 0.05 * (gx - eskf.bg[0])
         wy_s = 0.95 * wy_s + 0.05 * (gy - eskf.bg[1])
@@ -1423,17 +1625,6 @@ def run_pipeline(input_path: str, output_path: str, params: dict = None, ablatio
         q_last = eskf.q
         out_p[k] = p_last
         out_q[k] = q_last
-
-        if in_gap and gap_start_idx > 0 and (k - gap_start_idx) < 200:
-            p_rec = p_last
-            delta_bridge = np.array(p_rec) - np.array(p_gap_start)
-            g_len = k - gap_start_idx
-            if g_len > 0:
-                for b_i in range(gap_start_idx, k):
-                    alpha = float(b_i - gap_start_idx + 1) / float(g_len + 1)
-                    s_herm = 3.0 * alpha * alpha - 2.0 * alpha * alpha * alpha
-                    out_p[b_i] += delta_bridge * s_herm
-            in_gap = False
 
     # Process terminal blind segment if sensor failed
     if active_limit < n:
@@ -1454,30 +1645,80 @@ def run_pipeline(input_path: str, output_path: str, params: dict = None, ablatio
         f.write("# timestamp tx ty tz qx qy qz qw\n")
         for k in range(n):
             ts_str = ts_strs[k]
-            if ts_scale < 1e-6:
+            if ts_scale == 1e-9:
                 try:
                     t_int = int(ts_str)
                     sec = t_int // 1_000_000_000
                     nsec = t_int % 1_000_000_000
                     out_t = f"{sec}.{nsec:09d}"
                 except ValueError:
-                    out_t = f"{float(ts_str):.9f}"
+                    out_t = f"{float(ts_str) * 1e-9:.9f}"
             else:
-                out_t = f"{float(ts_str) * ts_scale:.9f}"
+                out_t = f"{float(ts_str):.9f}"
             p = out_p[k]
             q = out_q[k]
             f.write(f"{out_t} {p[0]:.9f} {p[1]:.9f} {p[2]:.9f} {q[1]:.9f} {q[2]:.9f} {q[3]:.9f} {q[0]:.9f}\n")
 
+        # Extrapolate 5.0 s if append_blind is requested
+        if append_blind and n > 0:
+            anchor = make_blind_anchor(eskf, pr)
+            dt_b = dt_nom if dt_nom > 0 else 0.005
+            dt_b_ns = max(1, int(round(dt_b * 1e9)))
+            n_blind = int(round(5.0 / dt_b))
+            try:
+                last_t_ns = int(ts_strs[-1]) if ts_scale == 1e-9 else int(round(float(ts_strs[-1]) * 1e9))
+            except Exception:
+                last_t_ns = 0
+            for step in range(1, n_blind + 1):
+                tau = step * dt_b
+                pb, qb = eval_blind_pose(tau, anchor, pr)
+                if ts_scale == 1e-9 and last_t_ns > 0:
+                    t_step_ns = last_t_ns + step * dt_b_ns
+                    sec = t_step_ns // 1_000_000_000
+                    nsec = t_step_ns % 1_000_000_000
+                    out_t = f"{sec}.{nsec:09d}"
+                else:
+                    out_t = f"{float(ts_strs[-1]) + tau:.9f}"
+                f.write(f"{out_t} {pb[0]:.9f} {pb[1]:.9f} {pb[2]:.9f} {qb[1]:.9f} {qb[2]:.9f} {qb[3]:.9f} {qb[0]:.9f}\n")
+
+
+class _CustomParser(argparse.ArgumentParser):
+    def error(self, message):
+        sys.stderr.write(f"error: {message}\n")
+        sys.exit(1)
+
 
 def main():
-    parser = argparse.ArgumentParser(description="Standalone Single-File 6-DoF Inertial Estimator")
-    parser.add_argument("input", help="Path to input IMU CSV, directory, or ZIP")
+    parser = _CustomParser(description="Standalone Single-File 6-DoF Inertial Estimator")
+    parser.add_argument("input", nargs="?", default=None, help="Path to input IMU CSV, directory, or ZIP")
     parser.add_argument("output", nargs="?", default="estimated_trajectory.txt",
                         help="Path to output trajectory file (default: estimated_trajectory.txt)")
-    parser.add_argument("--ablation", default="eskf_full", help="Ablation mode")
+    parser.add_argument("--append-blind", action="store_true", help="Extrapolate 5.0 s blind window after stream")
+    parser.add_argument(
+        "--ablation",
+        type=str,
+        default="eskf_full",
+        choices=["naive", "mahony", "eskf_basic", "eskf_full"],
+        help="Ablation mode",
+    )
+    parser.add_argument("--params", type=str, default=None, help="Custom params JSON")
     args = parser.parse_args()
 
-    run_pipeline(args.input, args.output, ablation=args.ablation)
+    if not args.input:
+        parser.print_usage(sys.stderr)
+        sys.exit(1)
+
+    if not os.path.exists(args.input):
+        sys.stderr.write(f"Input path not found: {args.input}\n")
+        sys.exit(1)
+
+    custom_params = None
+    if args.params and os.path.exists(args.params):
+        import json
+        with open(args.params, "r", encoding="utf-8") as f:
+            custom_params = json.load(f)
+
+    run_pipeline(args.input, args.output, params=custom_params, ablation=args.ablation, append_blind=args.append_blind)
 
 
 if __name__ == "__main__":
