@@ -10,13 +10,11 @@ BUNDLE_ZIP="${TEAM_NAME}.zip"
 
 echo "=== Building Submission Bundle for ${TEAM_NAME} (PRD Section 8.1) ==="
 
-# Step 1: Ensure binaries and estimated_trajectory.txt are fresh
-echo "[1/5] Building release binary..."
-make clean > /dev/null
-make > /dev/null
+# Step 1: Ensure estimated_trajectory.txt is fresh
+echo "[1/5] Python-only pipeline ready (no C++ build)..."
 
 echo "[2/5] Generating estimated_trajectory.txt from evaluation dataset: ${DATASET_PATH}..."
-./main "${DATASET_PATH}" estimated_trajectory.txt
+python3 main.py "${DATASET_PATH}" estimated_trajectory.txt
 
 # Resolve CSV path for validation
 VALIDATE_INPUT="${DATASET_PATH}"
@@ -41,9 +39,6 @@ if [ ! -f "metadata.json" ]; then
     exit 1
 fi
 python3 -c "import json; d = json.load(open('metadata.json')); assert d['team'] == '${TEAM_NAME}', f'Team name mismatch: {d[\"team\"]}'"
-
-# Clean build artifacts inside src/ before packaging so clean-room tests build from scratch
-make -C src clean > /dev/null
 
 # Step 3: Package bundle into zip
 echo "[4/5] Packaging ${BUNDLE_ZIP}..."

@@ -38,7 +38,7 @@ from tools.synth import rot_matrix_to_quat
 def evaluate_sequence_cutoffs(
     seq_cfg: Dict[str, str],
     seed: int,
-    binary_path: str = "./main",
+    binary_path: str = "main.py",
     config_path: str = "configs/degrade_default.json",
     work_dir: Path = Path("/tmp"),
 ) -> List[Dict[str, Any]]:
@@ -57,7 +57,10 @@ def evaluate_sequence_cutoffs(
     traj_out = case_dir / "traj_append_blind.txt"
 
     # Run with --append-blind to get both filtered trajectory and official blind extension
-    cmd = [str(binary_path), str(deg_imu), str(traj_out), "--append-blind"]
+    if str(binary_path).endswith(".py"):
+        cmd = [sys.executable, str(binary_path), str(deg_imu), str(traj_out), "--append-blind"]
+    else:
+        cmd = [str(binary_path), str(deg_imu), str(traj_out), "--append-blind"]
     subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
     t_ref, p_ref, q_ref = load_tum_trajectory(clean_gt)

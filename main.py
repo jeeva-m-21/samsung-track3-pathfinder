@@ -4,7 +4,11 @@ Reads a degraded IMU CSV (official degrade_imu.py format or EuRoC format),
 runs the full 15-state ESKF, writes estimated_trajectory.txt.
 No C++ compilation required.
 """
-import os, sys, zipfile, tempfile
+import argparse
+import os
+import sys
+import tempfile
+import zipfile
 from pathlib import Path
 
 # Ensure repo root is on sys.path so src.ref.* imports work
@@ -58,17 +62,44 @@ def resolve_imu_csv(raw: str) -> str:
     return str(p)
 
 
-def main():
-    args = sys.argv[1:]
-    if not args:
-        print(f"Usage: {sys.argv[0]} <input_csv_zip_or_dir> [output.txt]", file=sys.stderr)
+class _CustomParser(argparse.ArgumentParser):
+    def error(self, message):
+        sys.stderr.write(f"error: {message}\n")
         sys.exit(1)
-    input_path = args[0]
-    output_path = args[1] if len(args) > 1 else "estimated_trajectory.txt"
 
-    csv_path = resolve_imu_csv(input_path)
-    from src.ref.pipeline import run_eskf_full
-    run_eskf_full(csv_path, output_path)
+
+def main():
+    parser = _CustomParser(description="Track 03 Path Finder Estimator")
+    parser.add_argument("input", nargs="?", default=None, help="Input IMU CSV, ZIP, or directory")
+    parser.add_argument("output", nargs="?", default="estimated_trajectory.txt", help="Output trajectory path")
+    parser.add_argument("--append-blind", action="store_true", help="Extrapolate blind window after stream")
+    parser.add_argument(
+        "--ablation",
+        type=str,
+        default="eskf_full",
+        choices=["naive", "mahony", "eskf_basic", "eskf_full"],
+        help="Ablation mode",
+    )
+    parser.add_argument("--params", type=str, default=None, help="Custom params JSON")
+
+    args = parser.parse_args()
+    if not args.input:
+        parser.print_usage(sys.stderr)
+        sys.exit(1)
+
+    try:
+        csv_path = resolve_imu_csv(args.input)
+        from src.ref.pipeline import run_pipeline
+        run_pipeline(
+            csv_path,
+            args.output,
+            ablation=args.ablation,
+            append_blind=args.append_blind,
+            params=args.params,
+        )
+    except Exception as e:
+        sys.stderr.write(f"Error: {e}\n")
+        sys.exit(1)
 
 
 if __name__ == "__main__":

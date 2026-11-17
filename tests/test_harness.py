@@ -41,7 +41,7 @@ def test_compute_3way_loss():
 def test_harness_smoke(tmp_path):
     """Run smoke test on 1 sequence and 1 seed using DegradedHarness."""
     harness = DegradedHarness(
-        binary_path="./main",
+        binary_path="main.py",
         config_path="configs/degrade_default.json",
         append_blind=True,
         verbose=False,

@@ -67,13 +67,12 @@ def compute_null_baseline(gt_path: str) -> tuple:
 
 def run_suite(binary: str = None):
     if binary is None:
-        for candidate in ["./main", "src/main", "src/build/main"]:
-            if os.path.exists(candidate) and os.access(candidate, os.X_OK):
+        for candidate in ["main.py", "./main.py", "./main"]:
+            if os.path.exists(candidate):
                 binary = candidate
                 break
         if binary is None:
-            subprocess.run(["make", "-C", "src"], check=True)
-            binary = "./main"
+            binary = "main.py"
     results = {}
     print(f"| {'Sequence':<15} | {'Start ATE (m)':<15} | {'Aligned ATE (m)':<17} | {'RPE 1s (m)':<13} | {'Span (Est/Ref)':<16} | {'Gate (Official)':<15} |")
     print("|" + "-"*17 + "|" + "-"*17 + "|" + "-"*19 + "|" + "-"*15 + "|" + "-"*18 + "|" + "-"*17 + "|")
@@ -82,7 +81,8 @@ def run_suite(binary: str = None):
         if not os.path.exists(gt):
             continue
         out_file = f"/tmp/eval_{name}.txt"
-        subprocess.run([binary, imu, out_file], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        cmd = [sys.executable, binary, imu, out_file] if binary.endswith(".py") else [binary, imu, out_file]
+        subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         m = compute_trajectory_metrics(gt, out_file)
         null_start, null_aligned, null_rpe = compute_null_baseline(gt)
         

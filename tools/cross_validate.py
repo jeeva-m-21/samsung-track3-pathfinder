@@ -120,7 +120,10 @@ def run_evaluation(binary: Path, extra_args: List[str], presets: List[str], seed
                     imu_path, gt_path = generate_degraded_imu(clean_imu, clean_gt, preset, seed, case_dir)
                     out_traj = case_dir / "est_traj.txt"
 
-                    cmd = [str(binary), str(imu_path), str(out_traj)] + extra_args
+                    if str(binary).endswith(".py"):
+                        cmd = [sys.executable, str(binary), str(imu_path), str(out_traj)] + extra_args
+                    else:
+                        cmd = [str(binary), str(imu_path), str(out_traj)] + extra_args
                     res = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
                     if res.returncode != 0:
                         print(f"[{run_idx}/{total_runs}] ERROR on {case_id}: {res.stderr.strip()}")
@@ -171,7 +174,7 @@ def print_summary_table(eval_data: Dict, title: str = "Evaluation Summary"):
 
 def main():
     parser = argparse.ArgumentParser(description="Cross-validation with randomized degradations")
-    parser.add_argument("--binary", default="./main", help="Path to compiled executable")
+    parser.add_argument("--binary", default="main.py", help="Path to executable or main.py")
     parser.add_argument("--presets", default="clean,medium,severe", help="Comma-separated degradation presets")
     parser.add_argument("--seeds", default="42,101,777", help="Comma-separated random seeds")
     parser.add_argument("--ablation", default="eskf_full", help="Pipeline ablation mode")

@@ -95,14 +95,21 @@ class DegradedHarness:
 
     def __init__(
         self,
-        binary_path: str = "./main",
+        binary_path: str = "main.py",
         config_path: str = "configs/degrade_default.json",
         cache_dir: Optional[str] = None,
         append_blind: bool = True,
         extra_flags: Optional[List[str]] = None,
         verbose: bool = True,
     ):
-        self.binary_path = Path(binary_path).resolve()
+        p = Path(binary_path)
+        if not p.is_absolute():
+            p = REPO_ROOT / p
+        if not p.exists() and p.name == "main":
+            cand = p.parent / "main.py"
+            if cand.exists():
+                p = cand
+        self.binary_path = p.resolve()
         self.config_path = Path(config_path).resolve()
         self.cache_dir = Path(cache_dir).resolve() if cache_dir else None
         self.append_blind = append_blind
@@ -153,7 +160,10 @@ class DegradedHarness:
         ablation_mode: Optional[str] = None,
     ) -> float:
         """Run the binary or ablation mode and return runtime in seconds."""
-        cmd = [str(self.binary_path), str(imu_csv), str(out_traj)]
+        if str(self.binary_path).endswith(".py"):
+            cmd = [sys.executable, str(self.binary_path), str(imu_csv), str(out_traj)]
+        else:
+            cmd = [str(self.binary_path), str(imu_csv), str(out_traj)]
         if self.append_blind:
             cmd.append("--append-blind")
         if ablation_mode:
@@ -489,8 +499,8 @@ def main() -> None:
     parser.add_argument(
         "--binary",
         type=str,
-        default="./main",
-        help="Path to estimator executable (default: ./main)",
+        default="main.py",
+        help="Path to estimator executable (default: main.py)",
     )
     parser.add_argument(
         "--config",

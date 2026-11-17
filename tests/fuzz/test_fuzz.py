@@ -1,6 +1,6 @@
-"""Adversarial Fuzz Test Suite for C++ IMU Estimator Binary.
+"""Adversarial Fuzz Test Suite for IMU Estimator Python Entrypoint.
 
-Tests `src/cpp/build/main` against edge cases, corrupted inputs,
+Tests `main.py` against edge cases, corrupted inputs,
 extreme physical spikes, malformed files, and adversarial data.
 """
 
@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import math
 import subprocess
+import sys
 from pathlib import Path
 from typing import List
 
@@ -16,16 +17,14 @@ import pytest
 from tools.gen_fuzz_cases import FuzzCase, generate_fuzz_cases, get_all_fuzz_cases
 from tools.validate_trajectory import validate_trajectory
 
-CPP_BINARY = Path("src/cpp/build/main")
+REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+ENTRYPOINT = REPO_ROOT / "main.py"
 
 
 @pytest.fixture(scope="session", autouse=True)
-def ensure_cpp_binary() -> None:
-    """Ensure the C++ binary is built before running fuzz tests."""
-    if not CPP_BINARY.exists():
-        res = subprocess.run(["make", "-C", "src/cpp"], capture_output=True, text=True)
-        assert res.returncode == 0, f"Failed to build C++ binary: {res.stderr}"
-    assert CPP_BINARY.exists(), f"C++ binary {CPP_BINARY} not found"
+def ensure_entrypoint() -> None:
+    """Ensure main.py entrypoint exists before running fuzz tests."""
+    assert ENTRYPOINT.exists(), f"Entrypoint {ENTRYPOINT} not found"
 
 
 ALL_FUZZ_CASES = get_all_fuzz_cases()
@@ -34,32 +33,24 @@ FUZZ_CASE_IDS = [case.name for case in ALL_FUZZ_CASES]
 
 @pytest.mark.parametrize("case", ALL_FUZZ_CASES, ids=FUZZ_CASE_IDS)
 def test_fuzz_case(tmp_path: Path, case: FuzzCase) -> None:
-    """Run C++ binary on an adversarial case and verify robustness."""
+    """Run entrypoint on an adversarial case and verify robustness."""
     in_path = tmp_path / f"{case.name}.csv"
     out_path = tmp_path / f"{case.name}_out.txt"
 
     in_path.write_bytes(case.content)
 
-    # Execute binary with a strict 5.0s timeout
+    # Execute binary with a strict 10.0s timeout
     proc = subprocess.run(
-        [str(CPP_BINARY), str(in_path), str(out_path)],
+        [sys.executable, str(ENTRYPOINT), str(in_path), str(out_path)],
         capture_output=True,
-        timeout=5.0,
+        timeout=10.0,
     )
 
-    # 1. Verify clean termination (no SIGSEGV 139, SIGABRT 134, SIGFPE 136, SIGBUS 135)
-    # Subprocess return codes are negative on signals (-11, -6, etc.) or 128+signum
+    # 1. Verify clean termination (no crash signals)
     CRASH_CODES = {-11, 139, -6, 134, -8, 136, -7, 135}
     assert proc.returncode not in CRASH_CODES, (
         f"Case '{case.name}' crashed with returncode {proc.returncode}!\n"
         f"Stderr: {proc.stderr.decode('utf-8', errors='replace')}"
-    )
-    stderr_lower = proc.stderr.decode("utf-8", errors="replace").lower()
-    assert "sanitizer" not in stderr_lower, (
-        f"Sanitizer error in case '{case.name}':\n{proc.stderr.decode('utf-8', errors='replace')}"
-    )
-    assert "runtime error:" not in stderr_lower, (
-        f"UBSan error in case '{case.name}':\n{proc.stderr.decode('utf-8', errors='replace')}"
     )
     assert proc.returncode in case.expected_exit_codes, (
         f"Case '{case.name}' returned {proc.returncode}, expected {case.expected_exit_codes}.\n"
@@ -75,7 +66,7 @@ def test_fuzz_case(tmp_path: Path, case: FuzzCase) -> None:
         assert "nan" not in content_lower, f"Case '{case.name}' output contains NaN:\n{content[:500]}"
         assert "inf" not in content_lower, f"Case '{case.name}' output contains Inf:\n{content[:500]}"
 
-        lines = [line.strip() for line in content.splitlines() if line.strip()]
+        lines = [line.strip() for line in content.splitlines() if line.strip() and not line.startswith("#")]
 
         if case.expected_rows is not None:
             assert len(lines) == case.expected_rows, (
@@ -141,12 +132,9 @@ def test_fuzz_ablation_modes(tmp_path: Path, mode: str, case_name: str) -> None:
     in_path.write_bytes(case.content)
 
     # Test standard ablation run
-    cmd = [str(CPP_BINARY), str(in_path), str(out_path), f"--ablation={mode}"]
-    proc = subprocess.run(cmd, capture_output=True, timeout=5.0)
+    cmd = [sys.executable, str(ENTRYPOINT), str(in_path), str(out_path), f"--ablation={mode}"]
+    proc = subprocess.run(cmd, capture_output=True, timeout=10.0)
 
-    stderr_lower = proc.stderr.decode("utf-8", errors="replace").lower()
-    assert "sanitizer" not in stderr_lower, f"Sanitizer error in mode {mode} on {case_name}: {proc.stderr}"
-    assert "runtime error:" not in stderr_lower, f"UBSan error in mode {mode} on {case_name}: {proc.stderr}"
     assert proc.returncode in (0, 1), f"Mode {mode} on case {case_name} crashed: returncode {proc.returncode}"
 
     # For full and basic ESKF pipelines, verify gap/outlier rejection guarantees no NaNs or Infs
@@ -168,12 +156,9 @@ def test_fuzz_append_blind(tmp_path: Path, mode: str) -> None:
 
     in_path.write_bytes(case.content)
 
-    cmd = [str(CPP_BINARY), str(in_path), str(out_path), f"--ablation={mode}", "--append-blind"]
-    proc = subprocess.run(cmd, capture_output=True, timeout=5.0)
+    cmd = [sys.executable, str(ENTRYPOINT), str(in_path), str(out_path), f"--ablation={mode}", "--append-blind"]
+    proc = subprocess.run(cmd, capture_output=True, timeout=10.0)
 
-    stderr_lower = proc.stderr.decode("utf-8", errors="replace").lower()
-    assert "sanitizer" not in stderr_lower, f"Sanitizer error in append-blind mode {mode}: {proc.stderr}"
-    assert "runtime error:" not in stderr_lower, f"UBSan error in append-blind mode {mode}: {proc.stderr}"
     assert proc.returncode in (0, 1), f"--append-blind in mode {mode} crashed: returncode {proc.returncode}"
 
     if out_path.exists() and out_path.stat().st_size > 0:
@@ -187,22 +172,22 @@ def test_fuzz_cli_rejection(tmp_path: Path) -> None:
     out_path = tmp_path / "out.txt"
 
     # Missing arguments
-    res1 = subprocess.run([str(CPP_BINARY)], capture_output=True, timeout=5.0)
+    res1 = subprocess.run([sys.executable, str(ENTRYPOINT)], capture_output=True, timeout=10.0)
     assert res1.returncode == 1, f"Expected 1, got {res1.returncode}"
 
     # Non-existent input file
     res2 = subprocess.run(
-        [str(CPP_BINARY), "/tmp/this_file_does_not_exist_at_all.csv", str(out_path)],
+        [sys.executable, str(ENTRYPOINT), "/tmp/this_file_does_not_exist_at_all.csv", str(out_path)],
         capture_output=True,
-        timeout=5.0,
+        timeout=10.0,
     )
     assert res2.returncode == 1, f"Expected 1, got {res2.returncode}"
 
     # Invalid ablation argument (missing argument value)
     res3 = subprocess.run(
-        [str(CPP_BINARY), "/dev/null", str(out_path), "--ablation"],
+        [sys.executable, str(ENTRYPOINT), "/dev/null", str(out_path), "--ablation"],
         capture_output=True,
-        timeout=5.0,
+        timeout=10.0,
     )
     assert res3.returncode == 1, f"Expected 1, got {res3.returncode}"
 
