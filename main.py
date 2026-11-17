@@ -272,6 +272,7 @@ def load_imu_arrays(input_path: str):
             break
 
     data_rows = []
+    ts_strs = []
     for line in lines[start_idx:]:
         s = line.strip()
         if not s or s.startswith("#"):
@@ -286,6 +287,7 @@ def load_imu_arrays(input_path: str):
                 float(parts[4]), float(parts[5]), float(parts[6]),
             )
             data_rows.append(vals)
+            ts_strs.append(parts[0].strip())
         except ValueError:
             continue
 
@@ -341,7 +343,7 @@ def load_imu_arrays(input_path: str):
         if 0.5 < med_norm < 2.0:
             acc *= G_STD
 
-    return ts_raw, t_s, acc, gyr, ts_scale
+    return ts_strs, t_s, acc, gyr, ts_scale
 
 
 def _detect_gyro_first_by_norm(c1: np.ndarray, c2: np.ndarray) -> bool:
@@ -1353,7 +1355,7 @@ def run_pipeline(input_path: str, output_path: str, params: dict = None, ablatio
     if params is not None:
         pr.update(params)
 
-    ts_raw, t_s, acc, gyr, ts_scale = load_imu_arrays(input_path)
+    ts_strs, t_s, acc, gyr, ts_scale = load_imu_arrays(input_path)
     n = len(t_s)
     acc_clean, gyr_clean, dup_mask, invalid_mask, fail_start, noise_mult, dt_nom = preprocess_offline(
         t_s, acc, gyr, pr
@@ -1450,20 +1452,21 @@ def run_pipeline(input_path: str, output_path: str, params: dict = None, ablatio
 
     with open(output_path, "w", encoding="utf-8") as f:
         f.write("# timestamp tx ty tz qx qy qz qw\n")
-        if ts_scale < 1e-6:
-            for k in range(n):
-                t_raw_val = int(round(ts_raw[k]))
-                sec = t_raw_val // 1_000_000_000
-                nsec = t_raw_val % 1_000_000_000
-                p = out_p[k]
-                q = out_q[k]
-                f.write(f"{sec}.{nsec:09d} {p[0]:.9f} {p[1]:.9f} {p[2]:.9f} {q[1]:.9f} {q[2]:.9f} {q[3]:.9f} {q[0]:.9f}\n")
-        else:
-            for k in range(n):
-                t_val = ts_raw[k] * ts_scale
-                p = out_p[k]
-                q = out_q[k]
-                f.write(f"{t_val:.9f} {p[0]:.9f} {p[1]:.9f} {p[2]:.9f} {q[1]:.9f} {q[2]:.9f} {q[3]:.9f} {q[0]:.9f}\n")
+        for k in range(n):
+            ts_str = ts_strs[k]
+            if ts_scale < 1e-6:
+                try:
+                    t_int = int(ts_str)
+                    sec = t_int // 1_000_000_000
+                    nsec = t_int % 1_000_000_000
+                    out_t = f"{sec}.{nsec:09d}"
+                except ValueError:
+                    out_t = f"{float(ts_str):.9f}"
+            else:
+                out_t = f"{float(ts_str) * ts_scale:.9f}"
+            p = out_p[k]
+            q = out_q[k]
+            f.write(f"{out_t} {p[0]:.9f} {p[1]:.9f} {p[2]:.9f} {q[1]:.9f} {q[2]:.9f} {q[3]:.9f} {q[0]:.9f}\n")
 
 
 def main():
