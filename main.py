@@ -43,7 +43,7 @@ DEFAULT_PARAMS = {
     "sigma_g_base": 0.015,
     "sigma_a_base": 0.080,
     "sigma_bg_base": 0.0004,
-    "sigma_ba_base": 0.0030,
+    "sigma_ba_base": 0.0031,
     "enable_sev_bias_rw": True,
     "enable_inekf_transition": True,
 
@@ -56,8 +56,8 @@ DEFAULT_PARAMS = {
 
     # Regime OU damping (decoupled flight vs walking)
     "tau_ou": 1.946,
-    "tau_ou_flight": 1.946,
-    "tau_ou_walk": 2.0,
+    "tau_ou_flight": 1.753,
+    "tau_ou_walk": 2.347,
     "flight_vibe_thresh": 0.40,
     "ped_energy_thresh": 0.20,
 
@@ -70,13 +70,13 @@ DEFAULT_PARAMS = {
     # Handheld / Pedestrian NHC + Posture-Invariant Frame + Weinberg Stride Speed
     "enable_pedestrian_prior": True,
     "enable_leveled_ped_nhc": True,
-    "ped_sigma_lat": 0.160,
-    "ped_sigma_vert": 0.450,
+    "ped_sigma_lat": 0.123,
+    "ped_sigma_vert": 0.429,
     "ped_gate_threshold": 9.0,
-    "ped_max_velocity_mps": 2.4,
+    "ped_max_velocity_mps": 2.64,
     "enable_weinberg_bound": True,
-    "weinberg_k": 0.72,
-    "weinberg_sigma": 0.35,
+    "weinberg_k": 0.724,
+    "weinberg_sigma": 0.255,
 
     # Velocity bounding
     "enable_velocity_bounding": True,
@@ -85,9 +85,9 @@ DEFAULT_PARAMS = {
     "vel_bound_sigma": 0.140,
 
     # Gravity tilt alignment
-    "tilt_tau_a": 0.220,
+    "tilt_tau_a": 0.295,
     "tilt_omega_max": 2.2,
-    "tilt_sigma": 0.025,
+    "tilt_sigma": 0.050,
     "sigma_tilt": 0.025,
     "tilt_alpha_a": 2.0,
     "tilt_a_scale": 0.21426320932326784,
@@ -107,8 +107,8 @@ DEFAULT_PARAMS = {
 
     # Student-t Variational Scaling (EXP-E82)
     "enable_student_t": True,
-    "nu_tilt": 5.0,
-    "nu_vel": 5.0,
+    "nu_tilt": 4.0,
+    "nu_vel": 6.0,
 
     # Monitor & Gap / Burst recovery
     "monitor_alpha": 0.01,
@@ -119,12 +119,12 @@ DEFAULT_PARAMS = {
 
     # Terminal 5s blind prediction
     "ring_buffer_size": 256,
-    "tau_v": 3.367753801188697,
-    "shrink_v": 0.8573318952578088,
+    "tau_v": 0.803,
+    "shrink_v": 0.914,
     "enable_regime_curvature": True,
     "regime_curvature_min_w": 0.50,
-    "tau_omega_blind": 1.8265880306839262,
-    "blind_window_s": 1.0,
+    "tau_omega_blind": 0.411,
+    "blind_window_s": 0.585,
     "blind_yaw_only_walk": True,
 }
 
@@ -665,7 +665,7 @@ class SparseESKF:
         "recover_counter", "win_w", "win_w_vec", "win_a_norm", "win_gait",
         "ring", "ring_cap", "monitor", "q_scale_g", "q_scale_a",
         "fp", "hp0", "hp1", "hp2", "k0", "k1", "k2", "w0", "w1", "w2", "dx",
-        "_rot_cached", "_rot_q"
+        "_rot_cached", "_rot_q", "drag_e1", "drag_e2"
     )
 
     def __init__(self, params: dict):
@@ -677,6 +677,8 @@ class SparseESKF:
         self.ba = [0.0, 0.0, 0.0]
         self.P = [[0.0] * 15 for _ in range(15)]
         self.g_mag = G_STD
+        self.drag_e1 = (1.0, 0.0, 0.0)
+        self.drag_e2 = (0.0, 1.0, 0.0)
 
         self.vibe_ema = 0.0
         self.ped_energy = 0.0
@@ -862,6 +864,27 @@ class SparseESKF:
         self.q_scale_g = max(0.2, min(1.0, scale_g))
         self.q_scale_a = max(0.2, min(1.0, scale_a))
 
+        # Mounting-invariant thrust-orthogonal drag frame (e1, e2 perp u_up^B)
+        if abs(vz) < 0.8:
+            v_arb = (0.0, 0.0, 1.0)
+        else:
+            v_arb = (0.0, 1.0, 0.0)
+        dot_u = v_arb[0] * vx + v_arb[1] * vy + v_arb[2] * vz
+        e1x = v_arb[0] - dot_u * vx
+        e1y = v_arb[1] - dot_u * vy
+        e1z = v_arb[2] - dot_u * vz
+        e1_n = math.sqrt(e1x * e1x + e1y * e1y + e1z * e1z)
+        if e1_n < 1e-6:
+            e1x, e1y, e1z = 1.0, 0.0, 0.0
+            e1_n = 1.0
+        e1x /= e1_n; e1y /= e1_n; e1z /= e1_n
+        self.drag_e1 = (e1x, e1y, e1z)
+        self.drag_e2 = (
+            vy * e1z - vz * e1y,
+            vz * e1x - vx * e1z,
+            vx * e1y - vy * e1x,
+        )
+
         self.ba = [0.0, 0.0, 0.0]
         self.p = [0.0, 0.0, 0.0]
         self.v = [0.0, 0.0, 0.0]
@@ -1045,7 +1068,7 @@ class SparseESKF:
         self.win_a_norm.append(a_norm)
 
         is_zupt = False
-        if len(self.win_w) >= 20 and quality >= pr["zupt_min_quality"]:
+        if w_mag < 0.12 and len(self.win_w) >= 20 and quality >= pr["zupt_min_quality"]:
             inv_k = 1.0 / len(self.win_w)
             w_mean_n = sum(self.win_w) * inv_k
             a_mean_n = sum(self.win_a_norm) * inv_k
@@ -1096,15 +1119,30 @@ class SparseESKF:
                 vx, vy, vz = self.v
                 vbx = r00 * vx + r10 * vy + r20 * vz
                 vby = r01 * vx + r11 * vy + r21 * vz
+                vbz = r02 * vx + r12 * vy + r22 * vz
+
+                e1x, e1y, e1z = self.drag_e1
+                e2x, e2y, e2z = self.drag_e2
+
                 kd = pr["rotor_drag_kd"]
-                y0 = acx + kd * vbx
-                y1 = acy + kd * vby
+                y0 = (e1x * acx + e1y * acy + e1z * acz) + kd * (e1x * vbx + e1y * vby + e1z * vbz)
+                y1 = (e2x * acx + e2y * acy + e2z * acz) + kd * (e2x * vbx + e2y * vby + e2z * vbz)
+
                 sd = pr["rotor_drag_sigma"]
                 rd = (sd * sd) * r_scale
+
+                re1_0 = r00 * e1x + r01 * e1y + r02 * e1z
+                re1_1 = r10 * e1x + r11 * e1y + r12 * e1z
+                re1_2 = r20 * e1x + r21 * e1y + r22 * e1z
+
+                re2_0 = r00 * e2x + r01 * e2y + r02 * e2z
+                re2_1 = r10 * e2x + r11 * e2y + r12 * e2z
+                re2_2 = r20 * e2x + r21 * e2y + r22 * e2z
+
                 self._update_block2(
                     3, y0, y1,
-                    -kd * r00, -kd * r10, -kd * r20,
-                    -kd * r01, -kd * r11, -kd * r21,
+                    -kd * re1_0, -kd * re1_1, -kd * re1_2,
+                    -kd * re2_0, -kd * re2_1, -kd * re2_2,
                     rd, rd, gate_threshold=pr["rotor_drag_gate"], clear_pv=True,
                     nu=pr["nu_vel"]
                 )
