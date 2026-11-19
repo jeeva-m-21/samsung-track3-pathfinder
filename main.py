@@ -3,23 +3,26 @@
 main.py - Standalone Single-File 6-DoF Inertial Trajectory Estimator
 Samsung XR Hackathon Track 3: Path Finder (VITC_SingleThread)
 
-Self-contained pipeline:
-  1. Universal CSV/Dir/Zip Ingestion (header, accel/gyro order, s/ms/us/ns, g/ms2, N_out == N_in)
-  2. Offline Pre-Cleaner for degrade_imu.py (duplicates, stuck linear interp, joint spikes,
-     pre-median raw MAD noise tracking, gyro median-3 denoising, trailing [0..0] failure mask)
-  3. Clean Startup & Static-Window Mining + Bias-Invariant ZUPT + ZARU (w = b_g)
-  4. Fast Block-Sparse 15-State Student-t ESKF (analytical F_vtheta, 2D/3D fused Joseph updates)
-  5. Posture-Invariant Leveled Walking NHC + Weinberg Stride Envelope + Flight Drag Decoupling
-  6. Terminal Blind Predictor (Simpson curved / straight decay, in-place or --append-blind)
+Self-contained, zero-NumPy, pure-Python stdlib pipeline:
+  1. Streaming CSV/Dir/Zip Ingestion (header, accel/gyro order, s/ms/us/ns, g/ms2, N_out == N_in)
+  2. Offline Pre-Cleaner (running-max dup mask, stuck-sensor interp, two-tier spike sniping,
+     pre-median raw MAD noise tracking, gyro median-3, noise-adaptive zero-phase denoising,
+     trailing failure mask)
+  3. Clean Startup + Gyro Back-Integration + Static-Window Mining + O(1) Bias-Invariant ZUPT/ZARU
+  4. Fast Block-Sparse 15-State Student-t ESKF (analytical F_vtheta, 1D/2D/3D fused Joseph updates,
+     quadrature noise-compensated regime classification, physical-floor degradation monitor)
+  5. Posture-Invariant Leveled Walking NHC + Weinberg Stride Envelope + Decaying-Omega Gap Bridge
+  6. O(1) Incremental Terminal Blind Predictor (exponentially weighted anchor, curved/straight decay)
 """
 
 import argparse
+from array import array
 from collections import deque
+import io
 import math
 import os
 import sys
 import zipfile
-import numpy as np
 
 G_STD = 9.80665
 
@@ -47,12 +50,15 @@ DEFAULT_PARAMS = {
     "enable_sev_bias_rw": True,
     "enable_inekf_transition": True,
 
-    # Adaptive Q & Spike Filter
+    # Adaptive Q, Spike Filter & Noise-Adaptive Denoising
     "enable_adaptive_q": True,
     "adaptive_q_alpha": 0.005,
     "adaptive_q_ref": 0.0033119250641368016,
     "adaptive_q_max": 25.0,
     "enable_spike_filter": True,
+    "enable_adaptive_denoise": True,
+    "denoise_nm_start": 2.2,
+    "denoise_nm_span": 3.0,
 
     # Regime OU damping (decoupled flight vs walking)
     "tau_ou": 1.946,
@@ -61,11 +67,15 @@ DEFAULT_PARAMS = {
     "flight_vibe_thresh": 0.40,
     "ped_energy_thresh": 0.20,
 
-    # Aerial aerodynamic rotor drag prior (Leishman-Beard law)
+    # Aerial aerodynamic rotor drag prior (disabled by default per EXP-PY15)
     "enable_rotor_drag": False,
     "rotor_drag_kd": 0.140,
     "rotor_drag_sigma": 0.550,
     "rotor_drag_gate": 12.0,
+
+    # Optional soft flight vertical velocity prior (for LOOCV ablation)
+    "enable_flight_vz_prior": False,
+    "flight_vz_sigma": 1.20,
 
     # Handheld / Pedestrian NHC + Posture-Invariant Frame + Weinberg Stride Speed
     "enable_pedestrian_prior": True,
@@ -105,7 +115,7 @@ DEFAULT_PARAMS = {
     "zaru_sigma": 0.015,
     "zupt_min_quality": 0.30,
 
-    # Student-t Variational Scaling (EXP-E82)
+    # Student-t Variational Scaling
     "enable_student_t": True,
     "nu_tilt": 4.0,
     "nu_vel": 6.0,
@@ -113,7 +123,10 @@ DEFAULT_PARAMS = {
     # Monitor & Gap / Burst recovery
     "monitor_alpha": 0.01,
     "kappa_max": 50.0,
+    "monitor_var_acc_floor": 0.0,
+    "monitor_var_gyr_floor": 0.0,
     "tau_gap": 2.0,
+    "tau_w_gap": 0.40,
     "kappa_gap": 5.0,
     "recover_steps": 100,
 
@@ -121,6 +134,7 @@ DEFAULT_PARAMS = {
     "ring_buffer_size": 256,
     "tau_v": 0.803,
     "shrink_v": 0.914,
+    "blind_walk_vz_scale": 0.70,
     "enable_regime_curvature": True,
     "regime_curvature_min_w": 0.50,
     "tau_omega_blind": 0.411,
@@ -225,17 +239,29 @@ def median3(a: float, b: float, c: float) -> float:
     return c if b > c else b
 
 
+def _median_list(vals):
+    m = len(vals)
+    if m == 0:
+        return 0.0
+    s = sorted(vals)
+    mid = m >> 1
+    if m & 1:
+        return s[mid]
+    return 0.5 * (s[mid - 1] + s[mid])
+
+
 # ---------------------------------------------------------------------------
-# Universal Ingestion & Column/Unit/Timestamp Auto-Detection
+# Universal Streaming Ingestion & Column/Unit/Timestamp Auto-Detection
 # ---------------------------------------------------------------------------
 
-def _open_imu_lines(input_path: str):
+def _iter_imu_lines(input_path: str):
+    """Yield lines lazily from a CSV file, directory, or ZIP archive (O(1) RAM)."""
     if os.path.isdir(input_path):
-        candidates = [
+        candidates = (
             os.path.join(input_path, "imu0", "data.csv"),
             os.path.join(input_path, "mav0", "imu0", "data.csv"),
             os.path.join(input_path, "data.csv"),
-        ]
+        )
         csv_path = None
         for c in candidates:
             if os.path.isfile(c):
@@ -252,7 +278,9 @@ def _open_imu_lines(input_path: str):
         if csv_path is None:
             raise FileNotFoundError(f"No IMU CSV found inside directory: {input_path}")
         with open(csv_path, "r", encoding="utf-8-sig") as f:
-            return f.read().splitlines()
+            for line in f:
+                yield line
+        return
 
     if zipfile.is_zipfile(input_path):
         with zipfile.ZipFile(input_path, "r") as zf:
@@ -266,85 +294,128 @@ def _open_imu_lines(input_path: str):
                 target = sorted(names)[0]
             if target is None:
                 raise FileNotFoundError(f"No CSV found in zip: {input_path}")
-            return zf.read(target).decode("utf-8-sig").splitlines()
+            with zf.open(target, "r") as raw_f:
+                with io.TextIOWrapper(raw_f, encoding="utf-8-sig") as txt_f:
+                    for line in txt_f:
+                        yield line
+        return
 
     with open(input_path, "r", encoding="utf-8-sig") as f:
-        return f.read().splitlines()
+        for line in f:
+            yield line
 
 
-def _detect_gyro_first_by_norm(c1: np.ndarray, c2: np.ndarray, valid_mask: np.ndarray) -> bool:
-    if not np.any(valid_mask):
+def _open_imu_lines(input_path: str):
+    """Compatibility helper returning lines list."""
+    return [line.rstrip("\r\n") for line in _iter_imu_lines(input_path)]
+
+
+def _detect_gyro_first_by_norm(c1x, c1y, c1z, c2x, c2y, c2z, parse_inv) -> bool:
+    n = len(c1x)
+    step = max(1, n // 2000)
+    v1 = []
+    v2 = []
+    isfinite = math.isfinite
+    sqrt = math.sqrt
+    for k in range(0, n, step):
+        if parse_inv[k]:
+            continue
+        x1, y1, z1 = c1x[k], c1y[k], c1z[k]
+        x2, y2, z2 = c2x[k], c2y[k], c2z[k]
+        if not (isfinite(x1) and isfinite(y1) and isfinite(z1) and isfinite(x2) and isfinite(y2) and isfinite(z2)):
+            continue
+        n1 = sqrt(x1 * x1 + y1 * y1 + z1 * z1)
+        n2 = sqrt(x2 * x2 + y2 * y2 + z2 * z2)
+        if n1 > 1e-5:
+            v1.append(n1)
+        if n2 > 1e-5:
+            v2.append(n2)
+    if not v1 and not v2:
         return False
-    n1 = np.linalg.norm(c1[valid_mask], axis=1)
-    n2 = np.linalg.norm(c2[valid_mask], axis=1)
-    v1 = n1[np.isfinite(n1) & (n1 > 1e-5)]
-    v2 = n2[np.isfinite(n2) & (n2 > 1e-5)]
-    m1 = float(np.median(v1)) if len(v1) > 0 else 0.0
-    m2 = float(np.median(v2)) if len(v2) > 0 else 0.0
+    m1 = _median_list(v1)
+    m2 = _median_list(v2)
     d1 = min(abs(m1 - G_STD), abs(m1 - 1.0) * G_STD)
     d2 = min(abs(m2 - G_STD), abs(m2 - 1.0) * G_STD)
     return d2 < d1
 
 
 def load_imu_arrays(input_path: str):
-    lines = _open_imu_lines(input_path)
-    if not lines:
-        raise ValueError("Empty IMU file")
-
+    """
+    Stream-parse IMU telemetry into compact typed arrays (zero NumPy).
+    Returns: (ts_list, is_int_ts, ts_scale, t_s, acc_tuple, gyr_tuple, parse_inv)
+    where acc_tuple = (ax, ay, az) and gyr_tuple = (gx, gy, gz) are array('d').
+    """
     header_cols = None
-    start_idx = 0
-    for idx, line in enumerate(lines):
-        s = line.strip()
+    data_started = False
+    is_int_ts = True
+    ts_int = array("q")
+    ts_obj = None  # fallback only if float or int64 overflow
+    c1x = array("d")
+    c1y = array("d")
+    c1z = array("d")
+    c2x = array("d")
+    c2y = array("d")
+    c2z = array("d")
+    parse_inv = bytearray()
+
+    last_ts_val = 0
+    isfinite = math.isfinite
+    INT64_LIM = 9_000_000_000_000_000_000
+
+    def _push_ts(val):
+        nonlocal is_int_ts, ts_obj
+        if ts_obj is not None:
+            ts_obj.append(val)
+            return
+        if is_int_ts and isinstance(val, int) and -INT64_LIM <= val <= INT64_LIM:
+            ts_int.append(val)
+        else:
+            ts_obj = list(ts_int)
+            del ts_int[:]
+            ts_obj.append(val)
+
+    for raw_line in _iter_imu_lines(input_path):
+        s = raw_line.strip()
         if not s:
             continue
-        parts = [p.strip() for p in s.split(",")]
-        try:
-            float(parts[0])
-            start_idx = idx
-            break
-        except ValueError:
-            # Skip standalone comment lines unless it's a CSV column header
-            if s.startswith("#") and len(parts) < 7:
+        if not data_started:
+            parts = [p.strip() for p in s.split(",")]
+            try:
+                float(parts[0])
+                data_started = True
+            except ValueError:
+                if s.startswith("#") and len(parts) < 7:
+                    continue
+                header_cols = parts
+                data_started = True
                 continue
-            header_cols = parts
-            start_idx = idx + 1
-            break
+        else:
+            if s.startswith("#"):
+                continue
+            parts = s.split(",")
 
-    ts_list = []
-    is_int_ts = True
-    c1_list = []
-    c2_list = []
-    parse_invalid = []
-    last_ts_val = 0
-
-    for line in lines[start_idx:]:
-        s = line.strip()
-        if not s or s.startswith("#"):
-            continue
-        parts = s.split(",")
         ts_tok = parts[0].strip()
         try:
             if "." in ts_tok or "e" in ts_tok or "E" in ts_tok:
                 t_val = float(ts_tok)
-                if not math.isfinite(t_val):
+                if not isfinite(t_val):
                     raise ValueError("non-finite ts")
                 is_int_ts = False
             else:
                 t_val = int(ts_tok)
             last_ts_val = t_val
         except ValueError:
-            t_val = last_ts_val
-            ts_list.append(t_val)
-            c1_list.append((0.0, 0.0, 0.0))
-            c2_list.append((0.0, 0.0, 0.0))
-            parse_invalid.append(True)
+            _push_ts(last_ts_val)
+            c1x.append(0.0); c1y.append(0.0); c1z.append(0.0)
+            c2x.append(0.0); c2y.append(0.0); c2z.append(0.0)
+            parse_inv.append(1)
             continue
 
         if len(parts) < 7:
-            ts_list.append(t_val)
-            c1_list.append((0.0, 0.0, 0.0))
-            c2_list.append((0.0, 0.0, 0.0))
-            parse_invalid.append(True)
+            _push_ts(t_val)
+            c1x.append(0.0); c1y.append(0.0); c1z.append(0.0)
+            c2x.append(0.0); c2y.append(0.0); c2z.append(0.0)
+            parse_inv.append(1)
             continue
 
         try:
@@ -354,28 +425,36 @@ def load_imu_arrays(input_path: str):
             v4 = float(parts[4])
             v5 = float(parts[5])
             v6 = float(parts[6])
-            ts_list.append(t_val)
-            c1_list.append((v1, v2, v3))
-            c2_list.append((v4, v5, v6))
-            parse_invalid.append(False)
+            _push_ts(t_val)
+            c1x.append(v1); c1y.append(v2); c1z.append(v3)
+            c2x.append(v4); c2y.append(v5); c2z.append(v6)
+            parse_inv.append(0)
         except ValueError:
-            ts_list.append(t_val)
-            c1_list.append((0.0, 0.0, 0.0))
-            c2_list.append((0.0, 0.0, 0.0))
-            parse_invalid.append(True)
+            _push_ts(t_val)
+            c1x.append(0.0); c1y.append(0.0); c1z.append(0.0)
+            c2x.append(0.0); c2y.append(0.0); c2z.append(0.0)
+            parse_inv.append(1)
 
+    ts_list = ts_obj if ts_obj is not None else ts_int
     n = len(ts_list)
     if n == 0:
         raise ValueError("No valid IMU rows parsed")
 
     # Determine timestamp scale cleanly without float64 precision loss
+    t_s = array("d", [0.0]) * n
     if is_int_ts:
-        max_abs = max(abs(t) for t in ts_list)
-        if n > 1:
-            sample_diffs = [ts_list[i] - ts_list[i - 1] for i in range(1, min(n, 500)) if ts_list[i] > ts_list[i - 1]]
-            med_d = sorted(sample_diffs)[len(sample_diffs) // 2] if sample_diffs else 0
-        else:
-            med_d = 0
+        max_abs = 0
+        sample_diffs = []
+        lim_d = min(n, 500)
+        for k in range(n):
+            av = abs(ts_list[k])
+            if av > max_abs:
+                max_abs = av
+            if 0 < k < lim_d:
+                d = ts_list[k] - ts_list[k - 1]
+                if d > 0:
+                    sample_diffs.append(d)
+        med_d = _median_list(sample_diffs) if sample_diffs else 0
         h0_lower = header_cols[0].lower() if header_cols else ""
         if "[ns]" in h0_lower or med_d >= 1_000_000 or max_abs >= 100_000_000_000:
             ts_scale = 1e-9
@@ -386,12 +465,16 @@ def load_imu_arrays(input_path: str):
         else:
             ts_scale = 1.0
         t0_raw = ts_list[0]
-        t_s = np.array([(t - t0_raw) * ts_scale for t in ts_list], dtype=np.float64)
+        for k in range(n):
+            t_s[k] = (ts_list[k] - t0_raw) * ts_scale
     else:
-        ts_arr = np.array(ts_list, dtype=np.float64)
-        diffs = np.diff(ts_arr)
-        pos_diffs = diffs[diffs > 0]
-        med_dt = float(np.median(pos_diffs)) if len(pos_diffs) > 0 else 0.005
+        pos_diffs = []
+        lim_d = min(n, 1000)
+        for k in range(1, lim_d):
+            d = float(ts_list[k]) - float(ts_list[k - 1])
+            if d > 0.0:
+                pos_diffs.append(d)
+        med_dt = _median_list(pos_diffs) if pos_diffs else 0.005
         if med_dt < 1.0:
             ts_scale = 1.0
         elif med_dt < 1e3:
@@ -400,12 +483,9 @@ def load_imu_arrays(input_path: str):
             ts_scale = 1e-6
         else:
             ts_scale = 1e-9
-        t_s = (ts_arr - ts_arr[0]) * ts_scale
-
-    c1 = np.array(c1_list, dtype=np.float64)
-    c2 = np.array(c2_list, dtype=np.float64)
-    parse_inv_arr = np.array(parse_invalid, dtype=bool)
-    valid_norm_mask = (~parse_inv_arr) & np.all(np.isfinite(c1), axis=1) & np.all(np.isfinite(c2), axis=1)
+        t0_f = float(ts_list[0])
+        for k in range(n):
+            t_s[k] = (float(ts_list[k]) - t0_f) * ts_scale
 
     gyro_first = False
     if header_cols is not None and len(header_cols) >= 7:
@@ -416,47 +496,107 @@ def load_imu_arrays(input_path: str):
         elif ("a_" in h1 or "acc" in h1 or "ax" in h1) and ("w_" in h4 or "gyr" in h4 or "gx" in h4):
             gyro_first = False
         else:
-            gyro_first = _detect_gyro_first_by_norm(c1, c2, valid_norm_mask)
+            gyro_first = _detect_gyro_first_by_norm(c1x, c1y, c1z, c2x, c2y, c2z, parse_inv)
     else:
-        gyro_first = _detect_gyro_first_by_norm(c1, c2, valid_norm_mask)
+        gyro_first = _detect_gyro_first_by_norm(c1x, c1y, c1z, c2x, c2y, c2z, parse_inv)
 
     if gyro_first:
-        gyr = c1
-        acc = c2
+        gx, gy, gz = c1x, c1y, c1z
+        ax, ay, az = c2x, c2y, c2z
     else:
-        acc = c1
-        gyr = c2
+        ax, ay, az = c1x, c1y, c1z
+        gx, gy, gz = c2x, c2y, c2z
 
-    if np.any(valid_norm_mask):
-        acc_norms = np.linalg.norm(acc[valid_norm_mask], axis=1)
-        vn = acc_norms[np.isfinite(acc_norms) & (acc_norms > 0.1)]
-        if len(vn) > 0:
-            med_norm = float(np.median(vn))
-            if 0.5 < med_norm < 2.0:
-                acc *= G_STD
+    # Detect g-units vs m/s^2 on accelerometer
+    step_n = max(1, n // 2000)
+    an_samp = []
+    sqrt = math.sqrt
+    for k in range(0, n, step_n):
+        if parse_inv[k]:
+            continue
+        x, y, z = ax[k], ay[k], az[k]
+        if isfinite(x) and isfinite(y) and isfinite(z):
+            an = sqrt(x * x + y * y + z * z)
+            if an > 0.1:
+                an_samp.append(an)
+    if an_samp:
+        med_norm = _median_list(an_samp)
+        if 0.5 < med_norm < 2.0:
+            for k in range(n):
+                if isfinite(ax[k]):
+                    ax[k] *= G_STD
+                if isfinite(ay[k]):
+                    ay[k] *= G_STD
+                if isfinite(az[k]):
+                    az[k] *= G_STD
 
-    return ts_list, is_int_ts, ts_scale, t_s, acc, gyr, parse_inv_arr
+    return ts_list, is_int_ts, ts_scale, t_s, (ax, ay, az), (gx, gy, gz), parse_inv
 
 
 # ---------------------------------------------------------------------------
 # Offline Pre-Cleaner for degrade_imu.py Hazards
 # ---------------------------------------------------------------------------
 
-def preprocess_offline(t_s: np.ndarray, acc: np.ndarray, gyr: np.ndarray, parse_inv: np.ndarray, params: dict):
+def _unpack_vec3_arrays(arr_or_tuple):
+    """Accept either (x, y, z) tuple of array('d') or 2D list/array of rows."""
+    if isinstance(arr_or_tuple, tuple) and len(arr_or_tuple) == 3 and not isinstance(arr_or_tuple[0], (int, float)):
+        return array("d", arr_or_tuple[0]), array("d", arr_or_tuple[1]), array("d", arr_or_tuple[2])
+    n = len(arr_or_tuple)
+    xs = array("d", [0.0]) * n
+    ys = array("d", [0.0]) * n
+    zs = array("d", [0.0]) * n
+    for k in range(n):
+        r = arr_or_tuple[k]
+        xs[k] = float(r[0])
+        ys[k] = float(r[1])
+        zs[k] = float(r[2])
+    return xs, ys, zs
+
+
+def preprocess_offline(t_s, acc, gyr, parse_inv, params: dict):
     n = len(t_s)
-    dup_mask = np.zeros(n, dtype=bool)
-    if n > 1:
-        dup_mask[1:] = t_s[1:] <= t_s[:-1]
+    ax, ay, az = _unpack_vec3_arrays(acc)
+    gx, gy, gz = _unpack_vec3_arrays(gyr)
 
-    finite_mask = (~parse_inv) & np.all(np.isfinite(acc), axis=1) & np.all(np.isfinite(gyr), axis=1)
-    acc_clean = np.where(np.isfinite(acc), acc, 0.0)
-    gyr_clean = np.where(np.isfinite(gyr), gyr, 0.0)
+    dup_mask = bytearray(n)
+    invalid_mask = bytearray(n)
+    zero_mask = bytearray(n)
+    finite_mask = bytearray(n)
 
-    zero_mask = (
-        (np.max(np.abs(acc_clean), axis=1) < 1e-6) &
-        (np.max(np.abs(gyr_clean), axis=1) < 1e-6)
-    )
-    # Trailing [0..0] terminal 5s failure block (degrade_imu.py failure_seconds)
+    isfinite = math.isfinite
+    max_t = t_s[0] if n > 0 else 0.0
+
+    for k in range(n):
+        if k > 0:
+            tk = t_s[k]
+            if tk <= max_t:
+                dup_mask[k] = 1
+            else:
+                max_t = tk
+
+        x1, y1, z1 = ax[k], ay[k], az[k]
+        x2, y2, z2 = gx[k], gy[k], gz[k]
+        fin = (
+            (not parse_inv[k])
+            and isfinite(x1) and isfinite(y1) and isfinite(z1)
+            and isfinite(x2) and isfinite(y2) and isfinite(z2)
+        )
+        if not fin:
+            ax[k] = 0.0; ay[k] = 0.0; az[k] = 0.0
+            gx[k] = 0.0; gy[k] = 0.0; gz[k] = 0.0
+            invalid_mask[k] = 1
+            continue
+
+        finite_mask[k] = 1
+        ma = max(abs(x1), abs(y1), abs(z1))
+        mg = max(abs(x2), abs(y2), abs(z2))
+        if ma < 1e-6 and mg < 1e-6:
+            zero_mask[k] = 1
+            invalid_mask[k] = 1
+        elif ma > 160.0 or mg > 35.0:
+            invalid_mask[k] = 1
+
+    # Trailing [0..0] or non-finite terminal 5s failure block
     fail_start = n
     for k in range(n - 1, -1, -1):
         if zero_mask[k] or not finite_mask[k]:
@@ -464,110 +604,281 @@ def preprocess_offline(t_s: np.ndarray, acc: np.ndarray, gyr: np.ndarray, parse_
         else:
             break
 
-    extreme_mask = (
-        (np.max(np.abs(acc_clean), axis=1) > 160.0) |
-        (np.max(np.abs(gyr_clean), axis=1) > 35.0)
-    )
-    invalid_mask = (~finite_mask) | zero_mask | extreme_mask
+    # Defensive check: trailing bit-exact stuck sensor block >= 1.5 s at EOF
+    if fail_start == n and n >= 250:
+        lx, ly, lz = ax[n - 1], ay[n - 1], az[n - 1]
+        lgx, lgy, lgz = gx[n - 1], gy[n - 1], gz[n - 1]
+        stuck_k = n - 1
+        while stuck_k > 0:
+            p = stuck_k - 1
+            if (
+                abs(ax[p] - lx) < 1e-10 and abs(ay[p] - ly) < 1e-10 and abs(az[p] - lz) < 1e-10
+                and abs(gx[p] - lgx) < 1e-10 and abs(gy[p] - lgy) < 1e-10 and abs(gz[p] - lgz) < 1e-10
+            ):
+                stuck_k = p
+            else:
+                break
+        if (n - stuck_k) >= 200 and (t_s[n - 1] - t_s[stuck_k]) >= 1.5:
+            fail_start = stuck_k + 1
 
-    active_idx = np.flatnonzero((~dup_mask) & (~invalid_mask) & (np.arange(n) < fail_start))
+    active_idx = array("I")
+    for k in range(fail_start):
+        if (not dup_mask[k]) and (not invalid_mask[k]):
+            active_idx.append(k)
     m = len(active_idx)
-    if m >= 3:
-        a_act = acc_clean[active_idx].copy()
-        g_act = gyr_clean[active_idx].copy()
-        t_act = t_s[active_idx]
 
-        # 1. Bit-exact stuck-sensor run detection & linear interpolation (stuck_len = 2..10)
-        same_prev = (
-            np.all(np.abs(a_act[1:] - a_act[:-1]) < 1e-10, axis=1) &
-            np.all(np.abs(g_act[1:] - g_act[:-1]) < 1e-10, axis=1)
-        )
+    # 1. Bit-exact stuck-sensor run detection & linear interpolation
+    if m >= 3:
         i = 0
         while i < m - 1:
-            if same_prev[i]:
+            ki = active_idx[i]
+            kn = active_idx[i + 1]
+            same_joint = (
+                abs(ax[kn] - ax[ki]) < 1e-10 and abs(ay[kn] - ay[ki]) < 1e-10 and abs(az[kn] - az[ki]) < 1e-10
+                and abs(gx[kn] - gx[ki]) < 1e-10 and abs(gy[kn] - gy[ki]) < 1e-10 and abs(gz[kn] - gz[ki]) < 1e-10
+            )
+            if same_joint:
                 j = i + 1
-                while j < m - 1 and same_prev[j]:
-                    j += 1
+                while j < m - 1:
+                    k1 = active_idx[j]
+                    k2 = active_idx[j + 1]
+                    if (
+                        abs(ax[k2] - ax[k1]) < 1e-10 and abs(ay[k2] - ay[k1]) < 1e-10 and abs(az[k2] - az[k1]) < 1e-10
+                        and abs(gx[k2] - gx[k1]) < 1e-10 and abs(gy[k2] - gy[k1]) < 1e-10 and abs(gz[k2] - gz[k1]) < 1e-10
+                    ):
+                        j += 1
+                    else:
+                        break
                 run_len = j - i
-                if (j + 1) < m and (t_act[j + 1] - t_act[i]) < 0.25 and run_len <= 20:
-                    a0, a1 = a_act[i], a_act[j + 1]
-                    g0, g1 = g_act[i], g_act[j + 1]
-                    dt_span = t_act[j + 1] - t_act[i]
-                    if dt_span > 1e-9:
+                if (j + 1) < m and run_len <= 20:
+                    k_end = active_idx[j + 1]
+                    dt_span = t_s[k_end] - t_s[ki]
+                    if 1e-9 < dt_span < 0.25:
+                        a0x, a0y, a0z = ax[ki], ay[ki], az[ki]
+                        a1x, a1y, a1z = ax[k_end], ay[k_end], az[k_end]
+                        g0x, g0y, g0z = gx[ki], gy[ki], gz[ki]
+                        g1x, g1y, g1z = gx[k_end], gy[k_end], gz[k_end]
+                        inv_span = 1.0 / dt_span
+                        t_start = t_s[ki]
                         for p_k in range(i + 1, j + 1):
-                            alpha = (t_act[p_k] - t_act[i]) / dt_span
-                            a_act[p_k] = (1.0 - alpha) * a0 + alpha * a1
-                            g_act[p_k] = (1.0 - alpha) * g0 + alpha * g1
+                            kp = active_idx[p_k]
+                            al = (t_s[kp] - t_start) * inv_span
+                            om = 1.0 - al
+                            ax[kp] = om * a0x + al * a1x
+                            ay[kp] = om * a0y + al * a1y
+                            az[kp] = om * a0z + al * a1z
+                            gx[kp] = om * g0x + al * g1x
+                            gy[kp] = om * g0y + al * g1y
+                            gz[kp] = om * g0z + al * g1z
                 i = j + 1
             else:
                 i += 1
 
-        # 2. Joint-only spike sniping (requires simultaneous acc + gyr spike -> zero V2_02 distortion)
-        if m >= 5:
-            a_mid = 0.5 * (a_act[:-2] + a_act[2:])
-            g_mid = 0.5 * (g_act[:-2] + g_act[2:])
-            da = np.linalg.norm(a_act[1:-1] - a_mid, axis=1)
-            dg = np.linalg.norm(g_act[1:-1] - g_mid, axis=1)
-            da_nbr = np.linalg.norm(a_act[2:] - a_act[:-2], axis=1)
-            dg_nbr = np.linalg.norm(g_act[2:] - g_act[:-2], axis=1)
+    # 2. Two-tier spike sniping (squared-norm fast rejection path)
+    if m >= 5:
+        sqrt = math.sqrt
+        # Subsample ~2000 rows to estimate MAD cleanly without 116k sqrt calls
+        step_s = max(1, (m - 2) // 2000)
+        da_samp = []
+        dg_samp = []
+        for idx_k in range(1, m - 1, step_s):
+            kp = active_idx[idx_k - 1]
+            kc = active_idx[idx_k]
+            kn = active_idx[idx_k + 1]
+            dax = ax[kc] - 0.5 * (ax[kp] + ax[kn])
+            day = ay[kc] - 0.5 * (ay[kp] + ay[kn])
+            daz = az[kc] - 0.5 * (az[kp] + az[kn])
+            dgx = gx[kc] - 0.5 * (gx[kp] + gx[kn])
+            dgy = gy[kc] - 0.5 * (gy[kp] + gy[kn])
+            dgz = gz[kc] - 0.5 * (gz[kp] + gz[kn])
+            da_samp.append(sqrt(dax * dax + day * day + daz * daz))
+            dg_samp.append(sqrt(dgx * dgx + dgy * dgy + dgz * dgz))
 
-            mad_a = max(0.05, float(np.median(da)))
-            mad_g = max(0.005, float(np.median(dg)))
-            joint_spike = (
-                (da > max(1.8, 6.0 * mad_a)) & (da > 1.8 * da_nbr + 0.5) &
-                (dg > max(0.22, 6.0 * mad_g)) & (dg > 1.8 * dg_nbr + 0.08)
-            )
-            if np.any(joint_spike):
-                s_idx = np.flatnonzero(joint_spike) + 1
-                a_act[s_idx] = 0.5 * (a_act[s_idx - 1] + a_act[s_idx + 1])
-                g_act[s_idx] = 0.5 * (g_act[s_idx - 1] + g_act[s_idx + 1])
+        mad_a = max(0.05, _median_list(da_samp))
+        mad_g = max(0.005, _median_list(dg_samp))
+        th_a = max(1.8, 6.0 * mad_a)
+        th_a2 = th_a * th_a
+        th_g = max(0.22, 6.0 * mad_g)
+        th_g2 = th_g * th_g
+        th_a_iso = max(15.0, 18.0 * mad_a)
 
-        acc_clean[active_idx] = a_act
-        gyr_clean[active_idx] = g_act
+        spike_list = []
+        iso_a_list = []
+        for idx_k in range(1, m - 1):
+            kp = active_idx[idx_k - 1]
+            kc = active_idx[idx_k]
+            kn = active_idx[idx_k + 1]
+            dax = ax[kc] - 0.5 * (ax[kp] + ax[kn])
+            day = ay[kc] - 0.5 * (ay[kp] + ay[kn])
+            daz = az[kc] - 0.5 * (az[kp] + az[kn])
+            da2 = dax * dax + day * day + daz * daz
+            if da2 <= th_a2:
+                continue  # skips >99.5% of samples in one float compare
+            da = sqrt(da2)
+            nax = ax[kn] - ax[kp]; nay = ay[kn] - ay[kp]; naz = az[kn] - az[kp]
+            dan = sqrt(nax * nax + nay * nay + naz * naz)
+            if da <= 1.8 * dan + 0.5:
+                continue
+            dgx = gx[kc] - 0.5 * (gx[kp] + gx[kn])
+            dgy = gy[kc] - 0.5 * (gy[kp] + gy[kn])
+            dgz = gz[kc] - 0.5 * (gz[kp] + gz[kn])
+            dg2 = dgx * dgx + dgy * dgy + dgz * dgz
+            if dg2 > th_g2:
+                dg = sqrt(dg2)
+                ngx = gx[kn] - gx[kp]; ngy = gy[kn] - gy[kp]; ngz = gz[kn] - gz[kp]
+                dgn = sqrt(ngx * ngx + ngy * ngy + ngz * ngz)
+                if dg > 1.8 * dgn + 0.08:
+                    spike_list.append(idx_k)
+                    continue
+            if da > th_a_iso and da > 4.5 * dan + 1.5:
+                iso_a_list.append(idx_k)
+
+        for idx_k in spike_list:
+            kp = active_idx[idx_k - 1]
+            kc = active_idx[idx_k]
+            kn = active_idx[idx_k + 1]
+            ax[kc] = 0.5 * (ax[kp] + ax[kn])
+            ay[kc] = 0.5 * (ay[kp] + ay[kn])
+            az[kc] = 0.5 * (az[kp] + az[kn])
+            gx[kc] = 0.5 * (gx[kp] + gx[kn])
+            gy[kc] = 0.5 * (gy[kp] + gy[kn])
+            gz[kc] = 0.5 * (gz[kp] + gz[kn])
+
+        for idx_k in iso_a_list:
+            kp = active_idx[idx_k - 1]
+            kc = active_idx[idx_k]
+            kn = active_idx[idx_k + 1]
+            ax[kc] = 0.5 * (ax[kp] + ax[kn])
+            ay[kc] = 0.5 * (ay[kp] + ay[kn])
+            az[kc] = 0.5 * (az[kp] + az[kn])
 
     # 3. Pre-median raw gyro second-difference MAD noise tracker
-    noise_mult = np.ones(n, dtype=np.float64)
+    noise_mult = array("d", [1.0]) * n
     if params["enable_adaptive_q"] and m >= 4:
-        g_raw_act = gyr_clean[active_idx]
-        d2 = g_raw_act[2:] - 2.0 * g_raw_act[1:-1] + g_raw_act[:-2]
-        d_bar = np.mean(np.abs(d2), axis=1)
-        d_clamped = np.minimum(d_bar, 0.25)
-        alpha_q = params["adaptive_q_alpha"]
-        ref_g = params["adaptive_q_ref"]
-        max_q = params["adaptive_q_max"]
         c_mad = math.sqrt(math.pi / 12.0) * 1.4364
-        ewma_d = float(d_clamped[0])
-        mult_act = np.ones(m, dtype=np.float64)
-        for idx_k in range(len(d_clamped)):
-            ewma_d = (1.0 - alpha_q) * ewma_d + alpha_q * float(d_clamped[idx_k])
-            sig_g = ewma_d * c_mad
-            kq = sig_g / ref_g
+        n_init_samples = min(m - 2, 360)
+        step_init = max(1, n_init_samples // 100)
+        d_bars_init = []
+        for idx_k in range(0, n_init_samples, step_init):
+            ka = active_idx[idx_k]
+            kb = active_idx[idx_k + 1]
+            kc = active_idx[idx_k + 2]
+            d_bars_init.append((
+                abs(gx[kc] - 2.0 * gx[kb] + gx[ka])
+                + abs(gy[kc] - 2.0 * gy[kb] + gy[ka])
+                + abs(gz[kc] - 2.0 * gz[kb] + gz[ka])
+            ) * (1.0 / 3.0))
+        ref_g_clean = _median_list(d_bars_init) * c_mad if d_bars_init else params["adaptive_q_ref"]
+        ref_g = max(params["adaptive_q_ref"], ref_g_clean)
+
+        alpha_q = params["adaptive_q_alpha"]
+        one_m_aq = 1.0 - alpha_q
+        inv_ref_g = 1.0 / ref_g
+        max_q = params["adaptive_q_max"]
+        c_mad_inv_ref = c_mad * inv_ref_g
+
+        k0 = active_idx[0]
+        k1 = active_idx[1]
+        k2 = active_idx[2]
+        d0 = (
+            abs(gx[k2] - 2.0 * gx[k1] + gx[k0])
+            + abs(gy[k2] - 2.0 * gy[k1] + gy[k0])
+            + abs(gz[k2] - 2.0 * gz[k1] + gz[k0])
+        ) / 3.0
+        ewma_d = 0.25 if d0 > 0.25 else d0
+
+        first_kq = 1.0
+        for idx_k in range(m - 2):
+            ka = active_idx[idx_k]
+            kb = active_idx[idx_k + 1]
+            kc = active_idx[idx_k + 2]
+            d_bar = (
+                abs(gx[kc] - 2.0 * gx[kb] + gx[ka])
+                + abs(gy[kc] - 2.0 * gy[kb] + gy[ka])
+                + abs(gz[kc] - 2.0 * gz[kb] + gz[ka])
+            ) * (1.0 / 3.0)
+            if d_bar > 0.25:
+                d_bar = 0.25
+            ewma_d = one_m_aq * ewma_d + alpha_q * d_bar
+            kq = ewma_d * c_mad_inv_ref
             if kq < 1.0:
                 kq = 1.0
             elif kq > max_q:
                 kq = max_q
-            mult_act[idx_k + 2] = kq
-        mult_act[0] = mult_act[2] if m > 2 else 1.0
-        mult_act[1] = mult_act[2] if m > 2 else 1.0
-        noise_mult[active_idx] = mult_act
+            noise_mult[kc] = kq
+            if idx_k == 0:
+                first_kq = kq
+        noise_mult[k0] = first_kq
+        noise_mult[k1] = first_kq
 
-    # 4. Causal 3-tap median filter on gyro only
+    # 4. 3-tap median filter on gyro only
     if params["enable_spike_filter"] and m >= 3:
-        g_src = gyr_clean[active_idx]
-        g_med = g_src.copy()
-        t_act = t_s[active_idx]
+        gx_m = array("d", gx)
+        gy_m = array("d", gy)
+        gz_m = array("d", gz)
         for idx_k in range(1, m - 1):
-            if (t_act[idx_k] - t_act[idx_k - 1] <= 0.05) and (t_act[idx_k + 1] - t_act[idx_k] <= 0.05):
-                g_med[idx_k, 0] = median3(float(g_src[idx_k - 1, 0]), float(g_src[idx_k, 0]), float(g_src[idx_k + 1, 0]))
-                g_med[idx_k, 1] = median3(float(g_src[idx_k - 1, 1]), float(g_src[idx_k, 1]), float(g_src[idx_k + 1, 1]))
-                g_med[idx_k, 2] = median3(float(g_src[idx_k - 1, 2]), float(g_src[idx_k, 2]), float(g_src[idx_k + 1, 2]))
-        gyr_clean[active_idx] = g_med
+            kp = active_idx[idx_k - 1]
+            kc = active_idx[idx_k]
+            kn = active_idx[idx_k + 1]
+            if (t_s[kc] - t_s[kp] <= 0.05) and (t_s[kn] - t_s[kc] <= 0.05):
+                gx_m[kc] = median3(gx[kp], gx[kc], gx[kn])
+                gy_m[kc] = median3(gy[kp], gy[kc], gy[kn])
+                gz_m[kc] = median3(gz[kp], gz[kc], gz[kn])
+        gx, gy, gz = gx_m, gy_m, gz_m
 
-    valid_dts = np.diff(t_s[active_idx]) if m >= 2 else np.array([0.005])
-    pos_dts = valid_dts[(valid_dts > 1e-5) & (valid_dts < 0.1)]
-    dt_nom = float(np.median(pos_dts)) if len(pos_dts) > 0 else 0.005
+    # 5. Noise-adaptive zero-phase 3-tap binomial denoising [0.25, 0.5, 0.25]
+    #    Strictly inactive on clean/low-noise data (noise_mult <= denoise_nm_start).
+    if params.get("enable_adaptive_denoise", True) and m >= 3:
+        nm_start = params.get("denoise_nm_start", 2.2)
+        inv_span = 1.0 / max(0.1, params.get("denoise_nm_span", 3.0))
+        has_high_noise = False
+        for idx_k in range(1, m - 1):
+            if noise_mult[active_idx[idx_k]] > nm_start:
+                has_high_noise = True
+                break
+        if has_high_noise:
+            ax_d = array("d", ax)
+            ay_d = array("d", ay)
+            az_d = array("d", az)
+            gx_d = array("d", gx)
+            gy_d = array("d", gy)
+            gz_d = array("d", gz)
+            for idx_k in range(1, m - 1):
+                kc = active_idx[idx_k]
+                nm_k = noise_mult[kc]
+                if nm_k <= nm_start:
+                    continue
+                kp = active_idx[idx_k - 1]
+                kn = active_idx[idx_k + 1]
+                if (t_s[kc] - t_s[kp] > 0.05) or (t_s[kn] - t_s[kc] > 0.05):
+                    continue
+                al = (nm_k - nm_start) * inv_span
+                if al > 1.0:
+                    al = 1.0
+                wa = 0.75 * al
+                wg = 0.45 * al
+                oma = 1.0 - wa
+                omg = 1.0 - wg
+                ax_d[kc] = oma * ax[kc] + wa * (0.25 * ax[kp] + 0.5 * ax[kc] + 0.25 * ax[kn])
+                ay_d[kc] = oma * ay[kc] + wa * (0.25 * ay[kp] + 0.5 * ay[kc] + 0.25 * ay[kn])
+                az_d[kc] = oma * az[kc] + wa * (0.25 * az[kp] + 0.5 * az[kc] + 0.25 * az[kn])
+                gx_d[kc] = omg * gx[kc] + wg * (0.25 * gx[kp] + 0.5 * gx[kc] + 0.25 * gx[kn])
+                gy_d[kc] = omg * gy[kc] + wg * (0.25 * gy[kp] + 0.5 * gy[kc] + 0.25 * gy[kn])
+                gz_d[kc] = omg * gz[kc] + wg * (0.25 * gz[kp] + 0.5 * gz[kc] + 0.25 * gz[kn])
+            ax, ay, az = ax_d, ay_d, az_d
+            gx, gy, gz = gx_d, gy_d, gz_d
 
-    return acc_clean, gyr_clean, dup_mask, invalid_mask, fail_start, noise_mult, dt_nom
+    # Compute nominal sampling period dt_nom
+    pos_dts = []
+    if m >= 2:
+        step_dt = max(1, (m - 1) // 2000)
+        for idx_k in range(0, m - 1, step_dt):
+            dt_v = t_s[active_idx[idx_k + 1]] - t_s[active_idx[idx_k]]
+            if 1e-5 < dt_v < 0.1:
+                pos_dts.append(dt_v)
+    dt_nom = _median_list(pos_dts) if pos_dts else 0.005
+
+    return (ax, ay, az), (gx, gy, gz), dup_mask, invalid_mask, fail_start, noise_mult, dt_nom
 
 
 # ---------------------------------------------------------------------------
@@ -576,15 +887,23 @@ def preprocess_offline(t_s: np.ndarray, acc: np.ndarray, gyr: np.ndarray, parse_
 
 class DegradationMonitor:
     __slots__ = (
-        "alpha", "kappa_max", "sample_count",
+        "alpha", "kappa_max", "var_acc_floor", "var_gyr_floor", "sample_count",
         "prev_a", "prev_w", "has_prev",
         "var_acc", "var_gyr", "var_acc_ref", "var_gyr_ref",
         "calibrated", "quality", "kappa"
     )
 
-    def __init__(self, alpha: float = 0.01, kappa_max: float = 50.0):
+    def __init__(
+        self,
+        alpha: float = 0.01,
+        kappa_max: float = 50.0,
+        var_acc_floor: float = 0.25,
+        var_gyr_floor: float = 0.0025,
+    ):
         self.alpha = alpha
         self.kappa_max = kappa_max
+        self.var_acc_floor = var_acc_floor
+        self.var_gyr_floor = var_gyr_floor
         self.reset()
 
     def reset(self):
@@ -594,13 +913,20 @@ class DegradationMonitor:
         self.has_prev = False
         self.var_acc = 0.0
         self.var_gyr = 0.0
-        self.var_acc_ref = 0.0
-        self.var_gyr_ref = 0.0
+        self.var_acc_ref = self.var_acc_floor
+        self.var_gyr_ref = self.var_gyr_floor
         self.calibrated = False
         self.quality = 1.0
         self.kappa = 1.0
 
-    def step(self, t_elapsed: float, ax: float, ay: float, az: float, gx: float, gy: float, gz: float, t_init: float):
+    def step(
+        self,
+        t_elapsed: float,
+        ax: float, ay: float, az: float,
+        gx: float, gy: float, gz: float,
+        t_init: float,
+        noise_mult: float = 1.0,
+    ):
         if not self.has_prev:
             self.prev_a = (ax, ay, az)
             self.prev_w = (gx, gy, gz)
@@ -611,47 +937,44 @@ class DegradationMonitor:
         da_x = ax - self.prev_a[0]
         da_y = ay - self.prev_a[1]
         da_z = az - self.prev_a[2]
-        r_k = math.sqrt(da_x * da_x + da_y * da_y + da_z * da_z)
+        rk2 = da_x * da_x + da_y * da_y + da_z * da_z
 
         dw_x = gx - self.prev_w[0]
         dw_y = gy - self.prev_w[1]
         dw_z = gz - self.prev_w[2]
-        rho_k = math.sqrt(dw_x * dw_x + dw_y * dw_y + dw_z * dw_z)
+        rhok2 = dw_x * dw_x + dw_y * dw_y + dw_z * dw_z
 
         self.prev_a = (ax, ay, az)
         self.prev_w = (gx, gy, gz)
 
         alpha = self.alpha
         if self.sample_count == 1:
-            self.var_acc = r_k * r_k
-            self.var_gyr = rho_k * rho_k
+            self.var_acc = rk2
+            self.var_gyr = rhok2
         else:
-            self.var_acc = (1.0 - alpha) * self.var_acc + alpha * (r_k * r_k)
-            self.var_gyr = (1.0 - alpha) * self.var_gyr + alpha * (rho_k * rho_k)
+            om = 1.0 - alpha
+            self.var_acc = om * self.var_acc + alpha * rk2
+            self.var_gyr = om * self.var_gyr + alpha * rhok2
         self.sample_count += 1
 
         if t_elapsed < t_init:
-            self.var_acc_ref = self.var_acc
-            self.var_gyr_ref = self.var_gyr
+            self.var_acc_ref = max(self.var_acc_floor, self.var_acc)
+            self.var_gyr_ref = max(self.var_gyr_floor, self.var_gyr)
             self.quality = 1.0
             self.kappa = 1.0
             self.calibrated = False
         else:
             if not self.calibrated:
                 self.calibrated = True
-                if self.var_acc_ref <= 0.0:
-                    self.var_acc_ref = self.var_acc
-                if self.var_gyr_ref <= 0.0:
-                    self.var_gyr_ref = self.var_gyr
+                if self.var_acc_ref < self.var_acc_floor:
+                    self.var_acc_ref = max(self.var_acc_floor, self.var_acc)
+                if self.var_gyr_ref < self.var_gyr_floor:
+                    self.var_gyr_ref = max(self.var_gyr_floor, self.var_gyr)
 
-            sig_a_now = math.sqrt(max(0.0, self.var_acc))
-            sig_g_now = math.sqrt(max(0.0, self.var_gyr))
-            sig_a_ref = math.sqrt(max(0.0, self.var_acc_ref))
-            sig_g_ref = math.sqrt(max(0.0, self.var_gyr_ref))
-
-            n_acc = (sig_a_now / sig_a_ref) if sig_a_ref > 1e-12 else 1.0
-            n_gyr = (sig_g_now / sig_g_ref) if sig_g_ref > 1e-12 else 1.0
-            noise_ratio = max(1.0, max(n_acc, n_gyr))
+            n_acc = math.sqrt(max(0.0, self.var_acc) / self.var_acc_ref) if self.var_acc_ref > 1e-12 else 1.0
+            n_gyr = math.sqrt(max(0.0, self.var_gyr) / self.var_gyr_ref) if self.var_gyr_ref > 1e-12 else 1.0
+            cap_ratio = max(1.5, 2.0 * noise_mult)
+            noise_ratio = max(1.0, noise_mult, min(n_gyr, cap_ratio), min(n_acc, cap_ratio))
 
             self.quality = max(0.01, min(1.0, 1.0 / noise_ratio))
             self.kappa = max(1.0, min(self.kappa_max, noise_ratio))
@@ -659,17 +982,22 @@ class DegradationMonitor:
 
 class SparseESKF:
     __slots__ = (
-        "p", "v", "q", "bg", "ba", "P", "g_mag", "params",
-        "vibe_ema", "ped_energy", "gyro_ema", "dyn_acc_ema",
+        "p", "v", "q", "bg", "ba", "P", "g_mag", "params", "dt_nom",
+        "vibe_ema", "vibe_clean", "ped_energy", "gyro_ema", "dyn_acc_ema",
         "prev_a_raw", "has_prev_raw",
-        "recover_counter", "win_w", "win_w_vec", "win_a_norm", "win_gait",
+        "recover_counter",
+        "win_w", "win_w_vec", "win_a_norm", "win_gait",
+        "zupt_min_len", "_sum_w", "_sum_an", "_sum_an2",
+        "_sum_gx", "_sum_gy", "_sum_gz", "_sum_g2",
+        "_gait_step", "_gait_da_pp",
         "ring", "ring_cap", "monitor", "q_scale_g", "q_scale_a",
         "fp", "hp0", "hp1", "hp2", "k0", "k1", "k2", "w0", "w1", "w2", "dx",
-        "_rot_cached", "_rot_q", "drag_e1", "drag_e2"
+        "_rot_cached", "_rot_q", "drag_e1", "drag_e2", "_step_idx"
     )
 
-    def __init__(self, params: dict):
+    def __init__(self, params: dict, dt_nom: float = 0.005):
         self.params = params
+        self.dt_nom = dt_nom if dt_nom > 1e-5 else 0.005
         self.p = [0.0, 0.0, 0.0]
         self.v = [0.0, 0.0, 0.0]
         self.q = (1.0, 0.0, 0.0, 0.0)
@@ -679,8 +1007,10 @@ class SparseESKF:
         self.g_mag = G_STD
         self.drag_e1 = (1.0, 0.0, 0.0)
         self.drag_e2 = (0.0, 1.0, 0.0)
+        self._step_idx = 0
 
         self.vibe_ema = 0.0
+        self.vibe_clean = 0.0
         self.ped_energy = 0.0
         self.gyro_ema = 0.0
         self.dyn_acc_ema = 0.0
@@ -688,16 +1018,35 @@ class SparseESKF:
         self.has_prev_raw = False
         self.recover_counter = 0
 
-        self.win_w = deque(maxlen=50)
-        self.win_w_vec = deque(maxlen=50)
-        self.win_a_norm = deque(maxlen=50)
-        self.win_gait = deque(maxlen=160)
-        self.ring_cap = params.get("ring_buffer_size", 256)
+        fs = 1.0 / self.dt_nom
+        zupt_len = max(10, int(round(params.get("zupt_window_s", 0.25) * fs)))
+        gait_len = max(40, int(round(0.80 * fs)))
+        self.zupt_min_len = max(8, int(round(0.10 * fs)))
+        self.win_w = deque(maxlen=zupt_len)
+        self.win_w_vec = deque(maxlen=zupt_len)
+        self.win_a_norm = deque(maxlen=zupt_len)
+        self.win_gait = deque(maxlen=gait_len)
+
+        # O(1) running sums for ZUPT/ZARU
+        self._sum_w = 0.0
+        self._sum_an = 0.0
+        self._sum_an2 = 0.0
+        self._sum_gx = 0.0
+        self._sum_gy = 0.0
+        self._sum_gz = 0.0
+        self._sum_g2 = 0.0
+        self._gait_step = 0
+        self._gait_da_pp = 0.0
+
+        min_ring = max(params.get("ring_buffer_size", 256), int(round(params.get("blind_window_s", 0.585) * fs)) + 32)
+        self.ring_cap = min_ring
         self.ring = deque(maxlen=self.ring_cap)
 
         self.monitor = DegradationMonitor(
             alpha=params.get("monitor_alpha", 0.01),
-            kappa_max=params.get("kappa_max", 50.0)
+            kappa_max=params.get("kappa_max", 50.0),
+            var_acc_floor=params.get("monitor_var_acc_floor", 0.0),
+            var_gyr_floor=params.get("monitor_var_gyr_floor", 0.0),
         )
         self.q_scale_g = 1.0
         self.q_scale_a = 1.0
@@ -722,31 +1071,72 @@ class SparseESKF:
             self._rot_q = self.q
         return self._rot_cached
 
-    def initialize(self, t_arr, acc_arr, gyr_arr, dup_mask, invalid_mask, end_init_idx: int, fail_start: int):
+    def _push_zupt_sample(self, w_mag: float, a_norm: float, gx: float, gy: float, gz: float):
+        if len(self.win_w) == self.win_w.maxlen:
+            old_w = self.win_w[0]
+            old_an = self.win_a_norm[0]
+            ogx, ogy, ogz = self.win_w_vec[0]
+            self._sum_w -= old_w
+            self._sum_an -= old_an
+            self._sum_an2 -= old_an * old_an
+            self._sum_gx -= ogx
+            self._sum_gy -= ogy
+            self._sum_gz -= ogz
+            self._sum_g2 -= (ogx * ogx + ogy * ogy + ogz * ogz)
+        self.win_w.append(w_mag)
+        self.win_a_norm.append(a_norm)
+        self.win_w_vec.append((gx, gy, gz))
+        self._sum_w += w_mag
+        self._sum_an += a_norm
+        self._sum_an2 += a_norm * a_norm
+        self._sum_gx += gx
+        self._sum_gy += gy
+        self._sum_gz += gz
+        self._sum_g2 += (gx * gx + gy * gy + gz * gz)
+
+    def initialize(
+        self,
+        t_arr,
+        acc_arr,
+        gyr_arr,
+        dup_mask,
+        invalid_mask,
+        end_init_idx: int,
+        fail_start: int,
+        noise_mult=None,
+    ):
+        # Accept either (ax, ay, az) tuple of arrays or 2D row-indexed array
+        if isinstance(acc_arr, tuple) and len(acc_arr) == 3 and not isinstance(acc_arr[0], (int, float)):
+            ax_a, ay_a, az_a = acc_arr
+            gx_a, gy_a, gz_a = gyr_arr
+            flat = True
+        else:
+            flat = False
+
         wx_sum = wy_sum = wz_sum = 0.0
         ax_sum = ay_sum = az_sum = 0.0
         cnt = 0
         ws = []
         accs = []
         anorms = []
-        first_valid_idx = -1
+        valid_ks = []
+        sqrt = math.sqrt
 
         for k in range(end_init_idx):
             if dup_mask[k] or invalid_mask[k]:
                 continue
-            if first_valid_idx < 0:
-                first_valid_idx = k
-            ax, ay, az = float(acc_arr[k, 0]), float(acc_arr[k, 1]), float(acc_arr[k, 2])
-            gx, gy, gz = float(gyr_arr[k, 0]), float(gyr_arr[k, 1]), float(gyr_arr[k, 2])
-            wx_sum += gx
-            wy_sum += gy
-            wz_sum += gz
-            ax_sum += ax
-            ay_sum += ay
-            az_sum += az
+            if flat:
+                ax, ay, az = ax_a[k], ay_a[k], az_a[k]
+                gx, gy, gz = gx_a[k], gy_a[k], gz_a[k]
+            else:
+                ax, ay, az = float(acc_arr[k][0]), float(acc_arr[k][1]), float(acc_arr[k][2])
+                gx, gy, gz = float(gyr_arr[k][0]), float(gyr_arr[k][1]), float(gyr_arr[k][2])
+            wx_sum += gx; wy_sum += gy; wz_sum += gz
+            ax_sum += ax; ay_sum += ay; az_sum += az
             ws.append((gx, gy, gz))
             accs.append((ax, ay, az))
-            anorms.append(math.sqrt(ax * ax + ay * ay + az * az))
+            anorms.append(sqrt(ax * ax + ay * ay + az * az))
+            valid_ks.append(k)
             cnt += 1
 
         if cnt < 1:
@@ -757,15 +1147,13 @@ class SparseESKF:
 
         if cnt == 1:
             a_ref = accs[0]
-            a_ref_n = anorms[0]
-            if a_ref_n < 1e-6:
-                a_ref_n = G_STD
+            a_ref_n = anorms[0] if anorms[0] >= 1e-6 else G_STD
             vx, vy, vz = a_ref[0] / a_ref_n, a_ref[1] / a_ref_n, a_ref[2] / a_ref_n
             if 1.0 + vz < 1e-4:
                 self.q = (0.0, 1.0, 0.0, 0.0)
             else:
                 qw = 1.0 + vz
-                inv_qn = 1.0 / math.sqrt(qw * qw + vx * vx + vy * vy)
+                inv_qn = 1.0 / sqrt(qw * qw + vx * vx + vy * vy)
                 self.q = (qw * inv_qn, vy * inv_qn, -vx * inv_qn, 0.0)
             self.g_mag = G_STD
             self.bg = [0.0, 0.0, 0.0]
@@ -782,57 +1170,106 @@ class SparseESKF:
             for g in ws
         ) / (3.0 * cnt)
         a_mean_n = sum(anorms) * inv_c
-        a_var = sum((an - a_mean_n) ** 2 for an in anorms) / cnt
-        sigma_w = math.sqrt(w_var)
-        sigma_a = math.sqrt(a_var)
-        w_bar_mag = math.sqrt(w_bar[0] ** 2 + w_bar[1] ** 2 + w_bar[2] ** 2)
+        a_var = sum((an - a_mean_n) ** 2 for an in anorms) * inv_c
+        sigma_w = sqrt(w_var)
+        sigma_a = sqrt(a_var)
+        w_bar_mag = sqrt(w_bar[0] ** 2 + w_bar[1] ** 2 + w_bar[2] ** 2)
 
         motion_detected = (
-            (sigma_w > self.params["motion_detect_gyro_std"]) or
-            (sigma_a > self.params["motion_detect_acc_std"]) or
-            (w_bar_mag > 0.20)
+            (sigma_w > self.params["motion_detect_gyro_std"])
+            or (sigma_a > self.params["motion_detect_acc_std"])
+            or (w_bar_mag > 0.20)
         )
 
-        # Static-Window Mining if t=0 started in hand motion (e.g. TUM-VI room1)
+        best_mid_idx = 0
         if motion_detected and self.params.get("enable_static_window_mining", True):
-            # Find quietest 0.4 s sub-window within first 3.0 s for smoother gravity alignment
+            # Find quietest 0.4s sub-window within T_init for cleaner gravity direction and gyro bias
             best_a_var = 1e18
             best_a_bar = a_bar
-            win_len = min(80, cnt)
+            best_start_i = 0
+            win_len = min(max(10, int(round(0.40 / self.dt_nom))), cnt)
             if win_len >= 10:
-                for start_i in range(0, max(1, cnt - win_len + 1), 10):
+                step_w = max(1, win_len // 8)
+                for start_i in range(0, max(1, cnt - win_len + 1), step_w):
                     sub_an = anorms[start_i:start_i + win_len]
                     m_an = sum(sub_an) / win_len
                     v_an = sum((x - m_an) ** 2 for x in sub_an) / win_len
                     if v_an < best_a_var:
                         best_a_var = v_an
+                        best_start_i = start_i
                         sub_ac = accs[start_i:start_i + win_len]
                         best_a_bar = (
                             sum(x[0] for x in sub_ac) / win_len,
                             sum(x[1] for x in sub_ac) / win_len,
                             sum(x[2] for x in sub_ac) / win_len,
                         )
+                        best_mid_idx = start_i + (win_len >> 1)
             a_ref = best_a_bar
             self.g_mag = G_STD
 
-            # Scan early clean trajectory (t <= 15 s) for a genuine zero-motion pause to mine b_g0
             self.bg = [0.0, 0.0, 0.0]
-            scan_limit = min(fail_start, int(np.searchsorted(t_arr, t_arr[0] + 15.0)))
-            if scan_limit >= 50:
-                best_wv = 0.0004  # variance threshold (~0.02 rad/s std)
+            # Only accept sub-window gyro mean as b_g0 if the sub-window is truly static
+            if win_len >= 10 and best_a_var < 0.0225:
+                sub_ws = ws[best_start_i:best_start_i + win_len]
+                inv_wl = 1.0 / win_len
+                gmx = sum(g[0] for g in sub_ws) * inv_wl
+                gmy = sum(g[1] for g in sub_ws) * inv_wl
+                gmz = sum(g[2] for g in sub_ws) * inv_wl
+                g_mean_mag = sqrt(gmx * gmx + gmy * gmy + gmz * gmz)
+                gv = sum(
+                    (g[0] - gmx) ** 2 + (g[1] - gmy) ** 2 + (g[2] - gmz) ** 2
+                    for g in sub_ws
+                ) * inv_wl / 3.0
+                a_sub_mag = sqrt(best_a_bar[0] ** 2 + best_a_bar[1] ** 2 + best_a_bar[2] ** 2)
+                if gv < 0.0004 and g_mean_mag < 0.12 and abs(a_sub_mag - G_STD) < 0.35:
+                    self.bg = [gmx, gmy, gmz]
+
+            # Scan early clean trajectory (t <= 15 s) for a verified zero-motion pause to refine b_g0
+            t0_val = float(t_arr[0])
+            scan_limit = fail_start
+            t_scan_max = t0_val + 15.0
+            for idx_s in range(fail_start):
+                if float(t_arr[idx_s]) > t_scan_max:
+                    scan_limit = idx_s
+                    break
+
+            w_mine = max(20, int(round(0.25 / self.dt_nom)))
+            if scan_limit >= w_mine:
+                best_wv = 0.0004
                 best_bg = None
-                for sk in range(0, scan_limit - 50, 25):
-                    if np.any(dup_mask[sk:sk + 50]) or np.any(invalid_mask[sk:sk + 50]):
+                step_m = max(1, w_mine >> 1)
+                for sk in range(0, scan_limit - w_mine, step_m):
+                    ok = True
+                    for u in range(sk, sk + w_mine):
+                        if dup_mask[u] or invalid_mask[u]:
+                            ok = False
+                            break
+                        if noise_mult is not None and noise_mult[u] > 2.5:
+                            ok = False
+                            break
+                    if not ok:
                         continue
-                    g_win = gyr_arr[sk:sk + 50]
-                    a_win = acc_arr[sk:sk + 50]
-                    gm = np.mean(g_win, axis=0)
-                    gv = float(np.mean(np.sum((g_win - gm) ** 2, axis=1))) / 3.0
-                    an = np.linalg.norm(a_win, axis=1)
-                    av = float(np.var(an))
-                    if gv < best_wv and av < 0.0225 and abs(float(np.mean(an)) - G_STD) < 0.35:
+                    sx = sy = sz = sg2 = san = san2 = 0.0
+                    for u in range(sk, sk + w_mine):
+                        if flat:
+                            ux, uy, uz = gx_a[u], gy_a[u], gz_a[u]
+                            axu, ayu, azu = ax_a[u], ay_a[u], az_a[u]
+                        else:
+                            ux, uy, uz = float(gyr_arr[u][0]), float(gyr_arr[u][1]), float(gyr_arr[u][2])
+                            axu, ayu, azu = float(acc_arr[u][0]), float(acc_arr[u][1]), float(acc_arr[u][2])
+                        sx += ux; sy += uy; sz += uz
+                        sg2 += ux * ux + uy * uy + uz * uz
+                        an_u = sqrt(axu * axu + ayu * ayu + azu * azu)
+                        san += an_u; san2 += an_u * an_u
+                    inv_wm = 1.0 / w_mine
+                    gmx, gmy, gmz = sx * inv_wm, sy * inv_wm, sz * inv_wm
+                    gv = (sg2 * inv_wm - (gmx * gmx + gmy * gmy + gmz * gmz)) / 3.0
+                    am = san * inv_wm
+                    av = san2 * inv_wm - am * am
+                    g_mean_mag = sqrt(gmx * gmx + gmy * gmy + gmz * gmz)
+                    if gv < best_wv and av < 0.0225 and abs(am - G_STD) < 0.35 and g_mean_mag < 0.08:
                         best_wv = gv
-                        best_bg = (float(gm[0]), float(gm[1]), float(gm[2]))
+                        best_bg = (gmx, gmy, gmz)
                 if best_bg is not None:
                     self.bg = [best_bg[0], best_bg[1], best_bg[2]]
         elif motion_detected:
@@ -842,38 +1279,55 @@ class SparseESKF:
         else:
             a_ref = a_bar
             self.bg = [w_bar[0], w_bar[1], w_bar[2]]
-            a_norm = math.sqrt(a_ref[0] ** 2 + a_ref[1] ** 2 + a_ref[2] ** 2)
+            a_norm = sqrt(a_ref[0] ** 2 + a_ref[1] ** 2 + a_ref[2] ** 2)
             self.g_mag = max(self.params["g_mag_clamp_min"], min(self.params["g_mag_clamp_max"], a_norm))
 
-        a_ref_n = math.sqrt(a_ref[0] ** 2 + a_ref[1] ** 2 + a_ref[2] ** 2)
+        a_ref_n = sqrt(a_ref[0] ** 2 + a_ref[1] ** 2 + a_ref[2] ** 2)
         if a_ref_n < 1e-6:
             a_ref_n = G_STD
 
         vx, vy, vz = a_ref[0] / a_ref_n, a_ref[1] / a_ref_n, a_ref[2] / a_ref_n
         if 1.0 + vz < 1e-4:
-            self.q = (0.0, 1.0, 0.0, 0.0)
+            q_init = (0.0, 1.0, 0.0, 0.0)
         else:
             qw = 1.0 + vz
             qx = vy
             qy = -vx
-            inv_qn = 1.0 / math.sqrt(qw * qw + qx * qx + qy * qy)
-            self.q = (qw * inv_qn, qx * inv_qn, qy * inv_qn, 0.0)
+            inv_qn = 1.0 / sqrt(qw * qw + qx * qx + qy * qy)
+            q_init = (qw * inv_qn, qx * inv_qn, qy * inv_qn, 0.0)
+
+        # Back-integrate clean startup gyro from best_mid_idx back to k = 0
+        if motion_detected and best_mid_idx > 0:
+            q_bt = q_init
+            bg0, bg1, bg2 = self.bg
+            for idx_b in range(best_mid_idx, 0, -1):
+                k_curr = valid_ks[idx_b]
+                k_prev = valid_ks[idx_b - 1]
+                dt_b = float(t_arr[k_curr]) - float(t_arr[k_prev])
+                if 0.0 < dt_b < 0.1:
+                    g_b = ws[idx_b]
+                    q_inv = rotvec_to_quat(
+                        -(g_b[0] - bg0) * dt_b,
+                        -(g_b[1] - bg1) * dt_b,
+                        -(g_b[2] - bg2) * dt_b,
+                    )
+                    q_bt = quat_norm_align(quat_mul(q_bt, q_inv), q_bt)
+            q_init = q_bt
+
+        self.q = q_init
 
         scale_g = (sigma_w / 0.020) if sigma_w > 1e-5 else 0.2
         scale_a = (sigma_a / 0.300) if sigma_a > 1e-5 else 0.2
         self.q_scale_g = max(0.2, min(1.0, scale_g))
         self.q_scale_a = max(0.2, min(1.0, scale_a))
 
-        # Mounting-invariant thrust-orthogonal drag frame (e1, e2 perp u_up^B)
-        if abs(vz) < 0.8:
-            v_arb = (0.0, 0.0, 1.0)
-        else:
-            v_arb = (0.0, 1.0, 0.0)
+        # Mounting-invariant thrust-orthogonal drag frame
+        v_arb = (0.0, 0.0, 1.0) if abs(vz) < 0.8 else (0.0, 1.0, 0.0)
         dot_u = v_arb[0] * vx + v_arb[1] * vy + v_arb[2] * vz
         e1x = v_arb[0] - dot_u * vx
         e1y = v_arb[1] - dot_u * vy
         e1z = v_arb[2] - dot_u * vz
-        e1_n = math.sqrt(e1x * e1x + e1y * e1y + e1z * e1z)
+        e1_n = sqrt(e1x * e1x + e1y * e1y + e1z * e1z)
         if e1_n < 1e-6:
             e1x, e1y, e1z = 1.0, 0.0, 0.0
             e1_n = 1.0
@@ -897,7 +1351,9 @@ class SparseESKF:
             row = P[i]
             for j in range(15):
                 row[j] = 0.0
-        sig_th = self.params["sigma_theta_0"] * (self.params["motion_detect_sigma_theta_mult"] if motion_detected else 1.0)
+        sig_th = self.params["sigma_theta_0"] * (
+            self.params["motion_detect_sigma_theta_mult"] if motion_detected else 1.0
+        )
         sig_v = self.params["sigma_v_0"]
         sig_p = self.params["sigma_p_0"]
         sig_bg = self.params["sigma_bg_0"]
@@ -911,26 +1367,42 @@ class SparseESKF:
             P[i + 12][i + 12] = sig_ba * sig_ba
 
     def get_w_walk(self) -> float:
-        if self.vibe_ema > self.params["flight_vibe_thresh"]:
-            vibe_score = max(0.0, 1.0 - (self.vibe_ema - 0.40) / 0.40)
+        vc = self.vibe_clean
+        ft = self.params["flight_vibe_thresh"]
+        if vc > ft:
+            vibe_score = max(0.0, 1.0 - (vc - ft) / 0.40)
         else:
             vibe_score = 1.0
-        spd = math.sqrt(self.v[0] ** 2 + self.v[1] ** 2 + self.v[2] ** 2)
+        v = self.v
+        spd = math.sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2])
         if spd < 0.15:
             speed_score = 0.0
         elif spd < 0.40:
-            speed_score = (spd - 0.15) / 0.25
+            speed_score = (spd - 0.15) * 4.0
         elif spd <= 2.30:
             speed_score = 1.0
         else:
-            speed_score = max(0.0, 1.0 - (spd - 2.30) / 1.00)
+            speed_score = max(0.0, 1.0 - (spd - 2.30))
         ped_score = min(1.0, self.ped_energy / 0.45)
         return max(0.0, min(1.0, vibe_score * speed_score * (0.2 + 0.8 * ped_score)))
 
-    def step(self, dt: float, ax: float, ay: float, az: float, gx: float, gy: float, gz: float,
-             noise_mult: float, t_elapsed: float):
+    def step(
+        self,
+        dt: float,
+        ax: float, ay: float, az: float,
+        gx: float, gy: float, gz: float,
+        noise_mult: float,
+        t_elapsed: float,
+    ):
         if dt <= 0.0:
             return
+        self._step_idx += 1
+        high_rate = False
+        do_nhc = True
+        do_tilt = True
+        nhc_r_mult = 1.0
+        tilt_r_mult = 1.0
+
         pr = self.params
         bg = self.bg
         ba = self.ba
@@ -941,10 +1413,11 @@ class SparseESKF:
         acy = ay - ba[1]
         acz = az - ba[2]
 
-        w_mag = math.sqrt(wx * wx + wy * wy + wz * wz)
-        a_norm = math.sqrt(ax * ax + ay * ay + az * az)
+        sqrt = math.sqrt
+        w_mag = sqrt(wx * wx + wy * wy + wz * wz)
+        a_norm = sqrt(ax * ax + ay * ay + az * az)
 
-        self.monitor.step(t_elapsed, ax, ay, az, gx, gy, gz, pr["T_init"])
+        self.monitor.step(t_elapsed, ax, ay, az, gx, gy, gz, pr["T_init"], noise_mult)
         quality = self.monitor.quality
         kappa = self.monitor.kappa
 
@@ -952,24 +1425,39 @@ class SparseESKF:
             self.prev_a_raw = [ax, ay, az]
             self.has_prev_raw = True
         else:
-            da_x = ax - self.prev_a_raw[0]
-            da_y = ay - self.prev_a_raw[1]
-            da_z = az - self.prev_a_raw[2]
-            d_a = math.sqrt(da_x * da_x + da_y * da_y + da_z * da_z)
+            pa = self.prev_a_raw
+            da_x = ax - pa[0]
+            da_y = ay - pa[1]
+            da_z = az - pa[2]
+            d_a = sqrt(da_x * da_x + da_y * da_y + da_z * da_z)
             self.vibe_ema = 0.98 * self.vibe_ema + 0.02 * d_a
+            # Quadrature noise subtraction isolates true rotor vibration from progressive white noise
+            nm_ex = max(0.0, noise_mult - 2.0)
+            if nm_ex > 0.0:
+                jam_da = 2.257 * pr["sigma_a_base"] * nm_ex
+                vc2 = self.vibe_ema * self.vibe_ema - jam_da * jam_da
+                self.vibe_clean = sqrt(vc2) if vc2 > 0.0 else 0.0
+            else:
+                self.vibe_clean = self.vibe_ema
+
             dev_a = abs(a_norm - self.g_mag)
             self.ped_energy = 0.99 * self.ped_energy + 0.01 * (dev_a * dev_a)
             if quality >= 0.5 and dev_a < 12.0:
-                a_excess = max(0.0, a_norm - self.g_mag)
-                self.dyn_acc_ema = 0.95 * self.dyn_acc_ema + 0.05 * a_excess
-            self.prev_a_raw = [ax, ay, az]
+                a_excess = a_norm - self.g_mag
+                if a_excess > 0.0:
+                    self.dyn_acc_ema = 0.95 * self.dyn_acc_ema + 0.05 * a_excess
+                else:
+                    self.dyn_acc_ema *= 0.95
+            pa[0] = ax; pa[1] = ay; pa[2] = az
 
         self.win_gait.append(a_norm)
+        self._gait_step += 1
         self.gyro_ema = 0.98 * self.gyro_ema + 0.02 * w_mag
-        is_flight = (self.vibe_ema > pr["flight_vibe_thresh"])
-        is_pedestrian = (not is_flight and self.ped_energy > pr["ped_energy_thresh"])
 
-        # Regime-decoupled OU damping (preserves cruise speed in flight, clamps walk drift)
+        is_flight = self.vibe_clean > pr["flight_vibe_thresh"]
+        is_pedestrian = (not is_flight) and (self.ped_energy > pr["ped_energy_thresh"])
+
+        # Regime-decoupled OU damping
         if is_flight:
             cur_tau_ou = pr.get("tau_ou_flight", pr["tau_ou"])
             if self.gyro_ema < 0.40:
@@ -980,13 +1468,17 @@ class SparseESKF:
             cur_tau_ou = pr["tau_ou"]
 
         # Dynamic velocity envelope (Weinberg biomechanical bound during walking)
-        dyn_envelope = pr["max_velocity_mps"] + (1.0 if is_flight else 0.0) * self.dyn_acc_ema
-        if dyn_envelope > 15.0:
-            dyn_envelope = 15.0
+        dyn_envelope = pr["max_velocity_mps"] + (0.5 * self.dyn_acc_ema if is_flight else 0.0)
+        if dyn_envelope > 6.5:
+            dyn_envelope = 6.5
+
         v_weinberg = None
         if is_pedestrian and pr.get("enable_weinberg_bound", True) and len(self.win_gait) >= 40:
-            da_pp = min(20.0, max(0.05, max(self.win_gait) - min(self.win_gait)))
-            v_weinberg = pr["weinberg_k"] * (da_pp ** 0.25)
+            if self._gait_step >= 10 or self._gait_da_pp <= 0.0:
+                self._gait_step = 0
+                wg = self.win_gait
+                self._gait_da_pp = min(20.0, max(0.05, max(wg) - min(wg)))
+            v_weinberg = pr["weinberg_k"] * (self._gait_da_pp ** 0.25)
             max_v = max(0.80, min(pr["ped_max_velocity_mps"], 1.35 * v_weinberg))
         elif is_pedestrian:
             max_v = pr["ped_max_velocity_mps"]
@@ -1007,24 +1499,27 @@ class SparseESKF:
         awz = rm20 * acx + rm21 * acy + rm22 * acz - self.g_mag
 
         gam = math.exp(-dt / max(0.1, cur_tau_ou))
-        vx_old, vy_old, vz_old = self.v
+        v = self.v
+        p = self.p
+        vx_old, vy_old, vz_old = v[0], v[1], v[2]
         vx_new = gam * vx_old + awx * dt
         vy_new = gam * vy_old + awy * dt
         vz_new = gam * vz_old + awz * dt
 
         half_dt = 0.5 * dt
-        self.p[0] += (vx_old + vx_new) * half_dt
-        self.p[1] += (vy_old + vy_new) * half_dt
-        self.p[2] += (vz_old + vz_new) * half_dt
-        self.v[0] = vx_new
-        self.v[1] = vy_new
-        self.v[2] = vz_new
+        p[0] += (vx_old + vx_new) * half_dt
+        p[1] += (vy_old + vy_new) * half_dt
+        p[2] += (vz_old + vz_new) * half_dt
+        v[0] = vx_new
+        v[1] = vy_new
+        v[2] = vz_new
         self.q = q_new
+        self._rot_cached = quat_to_rot(q_new)
+        self._rot_q = q_new
 
         # 2. Fast 9x9 Upper-Triangle Covariance Propagation
-        f00, f01, f02, f10, f11, f12, f20, f21, f22 = quat_to_rot(
-            rotvec_to_quat(-wx * dt, -wy * dt, -wz * dt)
-        )
+        #    F_theta = Exp(-w*dt) == R_step^T (saves a full rotvec_to_quat call)
+        rs00, rs01, rs02, rs10, rs11, rs12, rs20, rs21, rs22 = quat_to_rot(q_step)
         gdt = self.g_mag * dt
         if pr["enable_inekf_transition"]:
             ft00, ft01, ft02 = gdt * r10, gdt * r11, gdt * r12
@@ -1051,7 +1546,7 @@ class SparseESKF:
 
         self._propagate_cov(
             dt, gam,
-            f00, f01, f02, f10, f11, f12, f20, f21, f22,
+            rs00, rs10, rs20, rs01, rs11, rs21, rs02, rs12, rs22,
             ft00, ft01, ft02, ft10, ft11, ft12, ft20, ft21, ft22,
             r00, r01, r02, r10, r11, r12, r20, r21, r22,
             q_th, q_v, q_bg, q_ba,
@@ -1062,44 +1557,40 @@ class SparseESKF:
             r_scale = 1.0 + 10.0 * (self.recover_counter / float(pr["recover_steps"]))
             self.recover_counter -= 1
 
-        # 3. Bias-Invariant Rest Detection (ZUPT + ZARU)
-        self.win_w.append(w_mag)
-        self.win_w_vec.append((gx, gy, gz))
-        self.win_a_norm.append(a_norm)
+        # 3. O(1) Bias-Invariant Rest Detection (ZUPT + ZARU)
+        self._push_zupt_sample(w_mag, a_norm, gx, gy, gz)
 
         is_zupt = False
-        if w_mag < 0.12 and len(self.win_w) >= 20 and quality >= pr["zupt_min_quality"]:
-            inv_k = 1.0 / len(self.win_w)
-            w_mean_n = sum(self.win_w) * inv_k
-            a_mean_n = sum(self.win_a_norm) * inv_k
-            sum_var = 0.0
-            for an in self.win_a_norm:
-                d = an - a_mean_n
-                sum_var += d * d
-            a_var_n = sum_var * inv_k
+        n_win = len(self.win_w)
+        if w_mag < 0.12 and n_win >= self.zupt_min_len and quality >= pr["zupt_min_quality"]:
+            inv_k = 1.0 / n_win
+            w_mean_n = self._sum_w * inv_k
+            a_mean_n = self._sum_an * inv_k
+            a_var_n = self._sum_an2 * inv_k - a_mean_n * a_mean_n
+            if a_var_n < 0.0:
+                a_var_n = 0.0
 
-            # Check bias-invariant gyro variance too so residual b_g doesn't mask rest
-            g_mx = sum(v[0] for v in self.win_w_vec) * inv_k
-            g_my = sum(v[1] for v in self.win_w_vec) * inv_k
-            g_mz = sum(v[2] for v in self.win_w_vec) * inv_k
-            g_var = sum(
-                (v[0] - g_mx) ** 2 + (v[1] - g_my) ** 2 + (v[2] - g_mz) ** 2
-                for v in self.win_w_vec
-            ) * inv_k / 3.0
+            g_mx = self._sum_gx * inv_k
+            g_my = self._sum_gy * inv_k
+            g_mz = self._sum_gz * inv_k
+            g_var = (self._sum_g2 * inv_k - (g_mx * g_mx + g_my * g_my + g_mz * g_mz)) * (1.0 / 3.0)
+            if g_var < 0.0:
+                g_var = 0.0
 
             zupt_lim = pr["zupt_gyro_mean"]
-            rest_gyro_ok = (w_mean_n < zupt_lim and self.win_w[-1] <= zupt_lim * 1.5) or (
+            rest_gyro_ok = (w_mean_n < zupt_lim and w_mag <= zupt_lim * 1.5) or (
                 pr.get("enable_zaru", True) and g_var < pr["zupt_gyro_var"] and w_mean_n < 0.08
             )
-            if rest_gyro_ok and abs(a_mean_n - self.g_mag) < pr["zupt_acc_dev"] and a_var_n < (pr["zupt_acc_dev"] ** 2):
+            acc_dev = pr["zupt_acc_dev"]
+            if rest_gyro_ok and abs(a_mean_n - self.g_mag) < acc_dev and a_var_n < (acc_dev * acc_dev):
                 is_zupt = True
 
-        # 4. Regime Updates (ZUPT+ZARU / Flight Drag / Posture-Invariant Walking NHC)
+        # 4. Regime Updates (ZUPT+ZARU / Flight / Posture-Invariant Walking NHC)
         if is_zupt:
             sig_z = pr["sigma_zupt"]
             r_z = (sig_z * sig_z) * r_scale
             self._update_block3(
-                3, -self.v[0], -self.v[1], -self.v[2],
+                3, -v[0], -v[1], -v[2],
                 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0,
                 r_z, r_z, r_z, gate_threshold=1e9, clear_pv=False,
                 m_dim=3, nu=pr["nu_vel"]
@@ -1108,33 +1599,30 @@ class SparseESKF:
                 sz = pr["zaru_sigma"]
                 rz_bg = (sz * sz) * r_scale
                 self._update_block3(
-                    9, gx - self.bg[0], gy - self.bg[1], gz - self.bg[2],
+                    9, gx - bg[0], gy - bg[1], gz - bg[2],
                     1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0,
                     rz_bg, rz_bg, rz_bg, gate_threshold=16.0, clear_pv=False,
                     m_dim=3, nu=pr["nu_vel"]
                 )
-        elif is_flight and pr["enable_rotor_drag"]:
-            if w_mag <= 2.5 and (3.0 <= a_norm <= 35.0):
+        elif is_flight:
+            if pr["enable_rotor_drag"] and w_mag <= 2.5 and (3.0 <= a_norm <= 35.0):
                 r00, r01, r02, r10, r11, r12, r20, r21, r22 = self._get_rot()
-                vx, vy, vz = self.v
+                vx, vy, vz = v[0], v[1], v[2]
                 vbx = r00 * vx + r10 * vy + r20 * vz
                 vby = r01 * vx + r11 * vy + r21 * vz
                 vbz = r02 * vx + r12 * vy + r22 * vz
 
                 e1x, e1y, e1z = self.drag_e1
                 e2x, e2y, e2z = self.drag_e2
-
                 kd = pr["rotor_drag_kd"]
                 y0 = (e1x * acx + e1y * acy + e1z * acz) + kd * (e1x * vbx + e1y * vby + e1z * vbz)
                 y1 = (e2x * acx + e2y * acy + e2z * acz) + kd * (e2x * vbx + e2y * vby + e2z * vbz)
 
                 sd = pr["rotor_drag_sigma"]
                 rd = (sd * sd) * r_scale
-
                 re1_0 = r00 * e1x + r01 * e1y + r02 * e1z
                 re1_1 = r10 * e1x + r11 * e1y + r12 * e1z
                 re1_2 = r20 * e1x + r21 * e1y + r22 * e1z
-
                 re2_0 = r00 * e2x + r01 * e2y + r02 * e2z
                 re2_1 = r10 * e2x + r11 * e2y + r12 * e2z
                 re2_2 = r20 * e2x + r21 * e2y + r22 * e2z
@@ -1146,21 +1634,29 @@ class SparseESKF:
                     rd, rd, gate_threshold=pr["rotor_drag_gate"], clear_pv=True,
                     nu=pr["nu_vel"]
                 )
-        elif is_pedestrian and pr["enable_pedestrian_prior"]:
+            elif pr.get("enable_flight_vz_prior", False):
+                rvz = (pr["flight_vz_sigma"] ** 2) * r_scale
+                self._update_block1(
+                    3, -v[2], 0.0, 0.0, 1.0,
+                    rvz, gate_threshold=16.0, clear_pv=True, nu=pr["nu_vel"]
+                )
+        elif is_pedestrian and pr["enable_pedestrian_prior"] and do_nhc:
             r00, r01, r02, r10, r11, r12, r20, r21, r22 = self._get_rot()
-            vx, vy, vz = self.v
-            rlat = (pr["ped_sigma_lat"] ** 2) * r_scale
-            rvert = (pr["ped_sigma_vert"] ** 2) * r_scale
+            vx, vy, vz = v[0], v[1], v[2]
+            rlat = (pr["ped_sigma_lat"] ** 2) * (r_scale * nhc_r_mult)
+            rvert = (pr["ped_sigma_vert"] ** 2) * (r_scale * nhc_r_mult)
             if pr.get("enable_leveled_ped_nhc", True):
-                # Gravity-leveled horizontal forward/lateral axes (immune to 45 deg handheld roll/pitch)
-                n_fx = math.sqrt(r00 * r00 + r10 * r10)
+                # Gravity-leveled horizontal forward/lateral axes (immune to handheld roll/pitch)
+                n_fx = sqrt(r00 * r00 + r10 * r10)
                 if n_fx > 0.25:
-                    fx_h, fy_h = r00 / n_fx, r10 / n_fx
+                    inv_nfx = 1.0 / n_fx
+                    fx_h, fy_h = r00 * inv_nfx, r10 * inv_nfx
                     lx_h, ly_h = -fy_h, fx_h
                 else:
-                    n_ly = math.sqrt(r01 * r01 + r11 * r11)
+                    n_ly = sqrt(r01 * r01 + r11 * r11)
                     if n_ly > 1e-6:
-                        lx_h, ly_h = r01 / n_ly, r11 / n_ly
+                        inv_nly = 1.0 / n_ly
+                        lx_h, ly_h = r01 * inv_nly, r11 * inv_nly
                         fx_h, fy_h = ly_h, -lx_h
                     else:
                         lx_h, ly_h = 0.0, 1.0
@@ -1173,18 +1669,17 @@ class SparseESKF:
                     rlat, rvert, gate_threshold=pr["ped_gate_threshold"], clear_pv=True,
                     nu=pr["nu_vel"]
                 )
-                # Soft Weinberg walking speed cap along forward horizontal axis
+                # Fast 1D Weinberg forward walking speed cap
                 if v_weinberg is not None:
-                    v_fwd_h = fx_h * self.v[0] + fy_h * self.v[1]
+                    v_fwd_h = fx_h * v[0] + fy_h * v[1]
                     spd_cap = 1.15 * v_weinberg
                     if abs(v_fwd_h) > spd_cap:
                         target_vf = math.copysign(spd_cap, v_fwd_h)
-                        rw = (pr["weinberg_sigma"] ** 2) * r_scale
-                        self._update_block2(
-                            3, target_vf - v_fwd_h, 0.0,
+                        rw = (pr["weinberg_sigma"] ** 2) * (r_scale * nhc_r_mult)
+                        self._update_block1(
+                            3, target_vf - v_fwd_h,
                             fx_h, fy_h, 0.0,
-                            0.0, 0.0, 0.0,
-                            rw, 1e8, gate_threshold=16.0, clear_pv=True,
+                            rw, gate_threshold=16.0, clear_pv=True,
                             nu=pr["nu_vel"]
                         )
             else:
@@ -1197,20 +1692,20 @@ class SparseESKF:
                     nu=pr["nu_vel"]
                 )
 
-        # 5. Noise-Adaptive Gravity Tilt Alignment (Student-t protected)
+        # 5. Noise-Adaptive Gravity Tilt Alignment (Student-t protected, immediate post-gap recovery)
         tau_base = pr["tilt_tau_a"] * max(1.0, min(3.0, noise_mult))
         q_clamped = max(0.0, min(1.0, quality))
         tau_eff = tau_base * (1.0 + 5.0 * (1.0 - q_clamped))
-        a_hat_norm = math.sqrt(acx * acx + acy * acy + acz * acz)
+        a_hat_norm = sqrt(acx * acx + acy * acy + acz * acz)
 
-        if w_mag < pr["tilt_omega_max"] and abs(a_hat_norm - self.g_mag) < tau_eff and a_hat_norm > 1e-6:
+        if do_tilt and w_mag < pr["tilt_omega_max"] and abs(a_hat_norm - self.g_mag) < tau_eff and a_hat_norm > 1e-6:
             r00, r01, r02, r10, r11, r12, r20, r21, r22 = self._get_rot()
             inv_an = 1.0 / a_hat_norm
             zx, zy, zz = acx * inv_an, acy * inv_an, acz * inv_an
             hx, hy, hz = r20, r21, r22
 
             sigma_tilt = pr["tilt_sigma"] / max(0.1, quality)
-            var_tilt = (sigma_tilt * sigma_tilt) * r_scale
+            var_tilt = (sigma_tilt * sigma_tilt) * min(2.0, r_scale) * tilt_r_mult
             a_ratio = abs(a_hat_norm - self.g_mag) / pr["tilt_a_scale"]
             w_ratio = w_mag / pr["tilt_omega_scale"]
             dyn_scale = 1.0 + pr["tilt_alpha_a"] * (a_ratio * a_ratio) + pr["tilt_alpha_omega"] * (w_ratio * w_ratio)
@@ -1227,8 +1722,8 @@ class SparseESKF:
 
         # 6. Velocity Bounding
         if pr["enable_velocity_bounding"]:
-            vx, vy, vz = self.v
-            vmag = math.sqrt(vx * vx + vy * vy + vz * vz)
+            vx, vy, vz = v[0], v[1], v[2]
+            vmag = sqrt(vx * vx + vy * vy + vz * vz)
             if vmag > max_v and vmag > 1e-9:
                 sc = max_v / vmag - 1.0
                 rv = (pr["velocity_bounding_sigma"] ** 2) * r_scale
@@ -1242,34 +1737,50 @@ class SparseESKF:
         # 7. Store state into O(1) ring buffer for blind extrapolation
         w_walk = self.get_w_walk()
         self.ring.append((
-            self.p[0], self.p[1], self.p[2],
-            self.v[0], self.v[1], self.v[2],
+            p[0], p[1], p[2],
+            v[0], v[1], v[2],
             self.q[0], self.q[1], self.q[2], self.q[3],
             wx, wy, wz, w_walk
         ))
 
-    def propagate_gap(self, gap_dt: float, dt_nom: float, wx_s: float, wy_s: float, wz_s: float):
+    def propagate_gap(
+        self,
+        gap_dt: float,
+        dt_nom: float,
+        wx_s: float, wy_s: float, wz_s: float,
+        push_ring: bool = True,
+    ):
         if gap_dt <= 0.0:
-            return
+            return (wx_s, wy_s, wz_s)
         pr = self.params
         n_sub = max(1, min(pr.get("gap_substep_max", 800), int(round(gap_dt / max(dt_nom, 1e-4)))))
         dt_sub = gap_dt / n_sub
-        dec = math.exp(-dt_sub / pr["tau_gap"])
+        dec_v = math.exp(-dt_sub / max(0.1, pr["tau_gap"]))
+        dec_w = math.exp(-dt_sub / max(0.05, pr.get("tau_w_gap", 0.40)))
         half_dt = 0.5 * dt_sub
 
         q_cur = self.q
-        q_step = rotvec_to_quat(wx_s * dt_sub, wy_s * dt_sub, wz_s * dt_sub)
-        vx, vy, vz = self.v
-        px, py, pz = self.p
+        vx, vy, vz = self.v[0], self.v[1], self.v[2]
+        px, py, pz = self.p[0], self.p[1], self.p[2]
+        wx, wy, wz = wx_s, wy_s, wz_s
+
         for _ in range(n_sub):
-            vx_n = vx * dec
-            vy_n = vy * dec
-            vz_n = vz * dec
+            vx_n = vx * dec_v
+            vy_n = vy * dec_v
+            vz_n = vz * dec_v
             px += (vx + vx_n) * half_dt
             py += (vy + vy_n) * half_dt
             pz += (vz + vz_n) * half_dt
             vx, vy, vz = vx_n, vy_n, vz_n
+
+            wx_m = wx * (0.5 * (1.0 + dec_w))
+            wy_m = wy * (0.5 * (1.0 + dec_w))
+            wz_m = wz * (0.5 * (1.0 + dec_w))
+            q_step = rotvec_to_quat(wx_m * dt_sub, wy_m * dt_sub, wz_m * dt_sub)
             q_cur = quat_norm_align(quat_mul(q_cur, q_step), q_cur)
+            wx *= dec_w
+            wy *= dec_w
+            wz *= dec_w
 
         self.p[0], self.p[1], self.p[2] = px, py, pz
         self.v[0], self.v[1], self.v[2] = vx, vy, vz
@@ -1286,6 +1797,14 @@ class SparseESKF:
             P[i + 3][i + 3] = min(1e6, P[i + 3][i + 3] + q_v)
             P[i + 6][i + 6] = min(1e6, P[i + 6][i + 6] + q_p)
         self.recover_counter = pr["recover_steps"]
+
+        if push_ring:
+            self.ring.append((
+                px, py, pz, vx, vy, vz,
+                q_cur[0], q_cur[1], q_cur[2], q_cur[3],
+                wx, wy, wz, self.get_w_walk()
+            ))
+        return (wx, wy, wz)
 
     def _propagate_cov(
         self, dt, gam,
@@ -1324,7 +1843,7 @@ class SparseESKF:
             fp7[j] = p7[j] + dt * v1
             fp8[j] = p8[j] + dt * v2
 
-        fps = (fp0, fp1, fp2, fp3, fp4, fp5, fp6, fp7, fp8)
+        fps = self.fp
         for i in range(9):
             row = fps[i]
             out = P[i]
@@ -1392,23 +1911,13 @@ class SparseESKF:
     def _inject_and_reset(self):
         dx = self.dx
         dth0, dth1, dth2 = dx[0], dx[1], dx[2]
-        self.q = quat_norm_align(quat_mul(self.q, rotvec_to_quat(dth0, dth1, dth2)), self.q)
-        self._rot_q = None
-        self.v[0] += dx[3]
-        self.v[1] += dx[4]
-        self.v[2] += dx[5]
-        self.p[0] += dx[6]
-        self.p[1] += dx[7]
-        self.p[2] += dx[8]
-        self.bg[0] += dx[9]
-        self.bg[1] += dx[10]
-        self.bg[2] += dx[11]
-        self.ba[0] += dx[12]
-        self.ba[1] += dx[13]
-        self.ba[2] += dx[14]
+        if abs(dth0) + abs(dth1) + abs(dth2) > 1e-9:
+            qn = quat_norm_align(quat_mul(self.q, rotvec_to_quat(dth0, dth1, dth2)), self.q)
+            self.q = qn
+            self._rot_cached = quat_to_rot(qn)
+            self._rot_q = qn
 
-        P = self.P
-        if abs(dth0) + abs(dth1) + abs(dth2) > 1e-12:
+            P = self.P
             g01, g02 = 0.5 * dth2, -0.5 * dth1
             g10, g12 = -0.5 * dth2, 0.5 * dth0
             g20, g21 = 0.5 * dth1, -0.5 * dth0
@@ -1425,9 +1934,87 @@ class SparseESKF:
                 ri[1] = a0 * g10 + a1 + a2 * g12
                 ri[2] = a0 * g20 + a1 * g21 + a2
 
+        v = self.v
+        p = self.p
+        bg = self.bg
+        ba = self.ba
+        v[0] += dx[3]; v[1] += dx[4]; v[2] += dx[5]
+        p[0] += dx[6]; p[1] += dx[7]; p[2] += dx[8]
+        bg[0] += dx[9]; bg[1] += dx[10]; bg[2] += dx[11]
+        ba[0] += dx[12]; ba[1] += dx[13]; ba[2] += dx[14]
+
+    def _update_block1(
+        self, blk: int, y0: float,
+        h00: float, h01: float, h02: float,
+        r0: float,
+        gate_threshold: float = 1e9, clear_pv: bool = False, nu: float = 5.0
+    ):
+        """Fast 1D scalar Joseph-form update with exact Student-t DOF (m_dim = 1)."""
+        P = self.P
+        if clear_pv:
+            for ii in range(6, 9):
+                row_p = P[ii]
+                row_p[3] = row_p[4] = row_p[5] = 0.0
+                P[3][ii] = P[4][ii] = P[5][ii] = 0.0
+
+        pb0 = P[blk]
+        pb1 = P[blk + 1]
+        pb2 = P[blk + 2]
+        hp0 = self.hp0
+        for j in range(15):
+            hp0[j] = h00 * pb0[j] + h01 * pb1[j] + h02 * pb2[j]
+
+        b0, b1, b2 = blk, blk + 1, blk + 2
+        s00_base = hp0[b0] * h00 + hp0[b1] * h01 + hp0[b2] * h02
+        s00 = s00_base + r0
+        if s00 < 1e-18:
+            return
+
+        d2 = (y0 * y0) / s00
+        if not math.isfinite(d2) or d2 > gate_threshold:
+            return
+        if self.params["enable_student_t"]:
+            scale = (nu + d2) / (nu + 1.0)
+            if scale < 1.0:
+                scale = 1.0
+            elif scale > 100.0:
+                scale = 100.0
+            if scale > 1.0:
+                r0 *= scale
+                s00 = s00_base + r0
+                if s00 < 1e-18:
+                    return
+
+        inv_s = 1.0 / s00
+        k0 = self.k0
+        dx = self.dx
         for i in range(15):
-            if P[i][i] < 1e-12:
-                P[i][i] = 1e-12
+            ki0 = hp0[i] * inv_s
+            k0[i] = ki0
+            dx[i] = ki0 * y0
+
+        hb0, hc0, hd0 = hp0[b0], hp0[b1], hp0[b2]
+        w0 = self.w0
+        for i in range(15):
+            row_i = P[i]
+            ki0 = k0[i]
+            uh0 = (
+                (row_i[b0] - ki0 * hb0) * h00
+                + (row_i[b1] - ki0 * hc0) * h01
+                + (row_i[b2] - ki0 * hd0) * h02
+            )
+            w0[i] = ki0 * r0 - uh0
+
+        for i in range(15):
+            row_i = P[i]
+            ki0 = k0[i]
+            wi0 = w0[i]
+            for j in range(i, 15):
+                val = row_i[j] - ki0 * hp0[j] + wi0 * k0[j]
+                row_i[j] = val
+                P[j][i] = val
+
+        self._inject_and_reset()
 
     def _update_block2(
         self, blk: int, y0: float, y1: float,
@@ -1471,9 +2058,9 @@ class SparseESKF:
         si11 = s00 * inv_d
 
         d2 = y0 * (si00 * y0 + si01 * y1) + y1 * (si10 * y0 + si11 * y1)
+        if not math.isfinite(d2) or d2 > gate_threshold:
+            return
         if self.params["enable_student_t"]:
-            if not math.isfinite(d2) or d2 > 1e6:
-                return
             scale = (nu + d2) / (nu + 2.0)
             if scale < 1.0:
                 scale = 1.0
@@ -1492,9 +2079,6 @@ class SparseESKF:
                 si01 = -s01 * inv_d
                 si10 = -s10 * inv_d
                 si11 = s00 * inv_d
-        else:
-            if not math.isfinite(d2) or d2 > gate_threshold:
-                return
 
         k0 = self.k0
         k1 = self.k1
@@ -1506,21 +2090,19 @@ class SparseESKF:
             k0[i], k1[i] = ki0, ki1
             dx[i] = ki0 * y0 + ki1 * y1
 
-        w0 = self.w0
-        w1 = self.w1
         hb0, hb1 = hp0[b0], hp1[b0]
         hc0, hc1 = hp0[b1], hp1[b1]
         hd0, hd1 = hp0[b2], hp1[b2]
+        w0 = self.w0
+        w1 = self.w1
         for i in range(15):
             row_i = P[i]
             ki0, ki1 = k0[i], k1[i]
             ub0 = row_i[b0] - (ki0 * hb0 + ki1 * hb1)
             ub1 = row_i[b1] - (ki0 * hc0 + ki1 * hc1)
             ub2 = row_i[b2] - (ki0 * hd0 + ki1 * hd1)
-            uh0 = ub0 * h00 + ub1 * h01 + ub2 * h02
-            uh1 = ub0 * h10 + ub1 * h11 + ub2 * h12
-            w0[i] = ki0 * r0 - uh0
-            w1[i] = ki1 * r1 - uh1
+            w0[i] = ki0 * r0 - (ub0 * h00 + ub1 * h01 + ub2 * h02)
+            w1[i] = ki1 * r1 - (ub0 * h10 + ub1 * h11 + ub2 * h12)
 
         for i in range(15):
             row_i = P[i]
@@ -1586,10 +2168,9 @@ class SparseESKF:
         t1 = si10 * y0 + si11 * y1 + si12 * y2
         t2 = si20 * y0 + si21 * y1 + si22 * y2
         d2 = y0 * t0 + y1 * t1 + y2 * t2
-
+        if not math.isfinite(d2) or d2 > gate_threshold:
+            return
         if self.params["enable_student_t"]:
-            if not math.isfinite(d2) or d2 > 1e6:
-                return
             scale = (nu + d2) / (nu + float(m_dim))
             if scale < 1.0:
                 scale = 1.0
@@ -1603,9 +2184,6 @@ class SparseESKF:
                 if sinv is None:
                     return
                 si00, si01, si02, si10, si11, si12, si20, si21, si22 = sinv
-        else:
-            if not math.isfinite(d2) or d2 > gate_threshold:
-                return
 
         k0 = self.k0
         k1 = self.k1
@@ -1619,24 +2197,21 @@ class SparseESKF:
             k0[i], k1[i], k2[i] = ki0, ki1, ki2
             dx[i] = ki0 * y0 + ki1 * y1 + ki2 * y2
 
-        w0 = self.w0
-        w1 = self.w1
-        w2 = self.w2
         hb0, hb1, hb2 = hp0[b0], hp1[b0], hp2[b0]
         hc0, hc1, hc2 = hp0[b1], hp1[b1], hp2[b1]
         hd0, hd1, hd2 = hp0[b2], hp1[b2], hp2[b2]
+        w0 = self.w0
+        w1 = self.w1
+        w2 = self.w2
         for i in range(15):
             row_i = P[i]
             ki0, ki1, ki2 = k0[i], k1[i], k2[i]
             ub0 = row_i[b0] - (ki0 * hb0 + ki1 * hb1 + ki2 * hb2)
             ub1 = row_i[b1] - (ki0 * hc0 + ki1 * hc1 + ki2 * hc2)
             ub2 = row_i[b2] - (ki0 * hd0 + ki1 * hd1 + ki2 * hd2)
-            uh0 = ub0 * h00 + ub1 * h01 + ub2 * h02
-            uh1 = ub0 * h10 + ub1 * h11 + ub2 * h12
-            uh2 = ub0 * h20 + ub1 * h21 + ub2 * h22
-            w0[i] = ki0 * r0 - uh0
-            w1[i] = ki1 * r1 - uh1
-            w2[i] = ki2 * r2 - uh2
+            w0[i] = ki0 * r0 - (ub0 * h00 + ub1 * h01 + ub2 * h02)
+            w1[i] = ki1 * r1 - (ub0 * h10 + ub1 * h11 + ub2 * h12)
+            w2[i] = ki2 * r2 - (ub0 * h20 + ub1 * h21 + ub2 * h22)
 
         for i in range(15):
             row_i = P[i]
@@ -1655,10 +2230,10 @@ class SparseESKF:
 
 
 # ---------------------------------------------------------------------------
-# Terminal 5s Blind Predictor
+# Terminal 5s Blind Predictor (O(1) Incremental + Exact API Compatibility)
 # ---------------------------------------------------------------------------
 
-def make_blind_anchor(eskf: SparseESKF, params: dict):
+def make_blind_anchor(eskf: SparseESKF, params: dict, dt_nom: float = None):
     ring = eskf.ring
     if not ring:
         return (
@@ -1668,20 +2243,39 @@ def make_blind_anchor(eskf: SparseESKF, params: dict):
             (0.0, 0.0, 0.0),
             eskf.get_w_walk(),
         )
-    cnt = min(len(ring), max(1, int(round(params["blind_window_s"] * 200.0))))
+    dt_use = dt_nom if (dt_nom is not None and dt_nom > 1e-5) else eskf.dt_nom
+    cnt = min(len(ring), max(1, int(round(params["blind_window_s"] / dt_use))))
     sub = list(ring)[-cnt:]
     last = sub[-1]
     pf = (last[0], last[1], last[2])
     qf = (last[6], last[7], last[8], last[9])
-    inv_c = 1.0 / cnt
-    vx = sum(s[3] for s in sub) * inv_c
-    vy = sum(s[4] for s in sub) * inv_c
-    vz = sum(s[5] for s in sub) * inv_c
-    wx = sum(s[10] for s in sub) * inv_c
-    wy = sum(s[11] for s in sub) * inv_c
-    wz = sum(s[12] for s in sub) * inv_c
-    w_walk = last[13]
-    return pf, (vx, vy, vz), qf, (wx, wy, wz), w_walk
+
+    # Linearly ramped weighting (0.5 -> 1.5) reduces boxcar phase lag while suppressing noise
+    vx = vy = vz = wx = wy = wz = ww = w_sum = 0.0
+    if cnt == 1:
+        s0 = sub[0]
+        vx, vy, vz = s0[3], s0[4], s0[5]
+        wx, wy, wz = s0[10], s0[11], s0[12]
+        ww = s0[13]
+        w_sum = 1.0
+    else:
+        inv_nm1 = 1.0 / (cnt - 1)
+        for idx, s in enumerate(sub):
+            wt = 0.5 + idx * inv_nm1
+            w_sum += wt
+            vx += wt * s[3]
+            vy += wt * s[4]
+            vz += wt * s[5]
+            wx += wt * s[10]
+            wy += wt * s[11]
+            wz += wt * s[12]
+            ww += wt * s[13]
+    inv_w = 1.0 / w_sum
+    w_walk = ww * inv_w
+    vz_out = (vz * inv_w) * (
+        params.get("blind_walk_vz_scale", 0.70) if w_walk >= params["regime_curvature_min_w"] else 1.0
+    )
+    return pf, (vx * inv_w, vy * inv_w, vz_out), qf, (wx * inv_w, wy * inv_w, wz * inv_w), w_walk
 
 
 def eval_blind_pose(tau: float, anchor, params: dict):
@@ -1704,7 +2298,6 @@ def eval_blind_pose(tau: float, anchor, params: dict):
 
     wx, wy, wz = wf
     if params.get("blind_yaw_only_walk", True):
-        # Project body omega onto world-Z yaw axis so walking doesn't pitch into ceiling/floor
         wz_world = r20 * wx + r21 * wy + r22 * wz
         wx = r20 * wz_world
         wy = r21 * wz_world
@@ -1734,28 +2327,128 @@ def eval_blind_pose(tau: float, anchor, params: dict):
 
     ds3 = ds / 3.0
     p_curv = (pf[0] + sx * ds3, pf[1] + sy * ds3, pf[2] + sz * ds3)
+    omw = 1.0 - w_walk
     return (
-        (1.0 - w_walk) * p_str[0] + w_walk * p_curv[0],
-        (1.0 - w_walk) * p_str[1] + w_walk * p_curv[1],
-        (1.0 - w_walk) * p_str[2] + w_walk * p_curv[2],
+        omw * p_str[0] + w_walk * p_curv[0],
+        omw * p_str[1] + w_walk * p_curv[1],
+        omw * p_str[2] + w_walk * p_curv[2],
     ), q_end
+
+
+class IncrementalBlindPredictor:
+    """O(1)-per-sample curved blind predictor (50x faster than re-running Simpson per row)."""
+    __slots__ = (
+        "pf", "vf", "qf", "w_walk", "use_curv",
+        "tau_v", "shrink_v", "tau_w",
+        "vb0x", "vb0y", "vb0z", "wx", "wy", "wz",
+        "last_tau", "cx", "cy", "cz", "q_cur", "last_vwx", "last_vwy", "last_vwz"
+    )
+
+    def __init__(self, anchor, params: dict):
+        pf, vf, qf, wf, w_walk = anchor
+        self.pf = pf
+        self.vf = vf
+        self.qf = qf
+        self.w_walk = w_walk
+        self.tau_v = params["tau_v"]
+        self.shrink_v = params["shrink_v"]
+        self.tau_w = params["tau_omega_blind"]
+        self.use_curv = bool(
+            params["enable_regime_curvature"] and (w_walk >= params["regime_curvature_min_w"])
+        )
+        self.last_tau = 0.0
+        self.cx, self.cy, self.cz = pf
+        self.q_cur = qf
+
+        if self.use_curv:
+            r00, r01, r02, r10, r11, r12, r20, r21, r22 = quat_to_rot(qf)
+            self.vb0x = r00 * vf[0] + r10 * vf[1] + r20 * vf[2]
+            self.vb0y = r01 * vf[0] + r11 * vf[1] + r21 * vf[2]
+            self.vb0z = r02 * vf[0] + r12 * vf[1] + r22 * vf[2]
+            wx, wy, wz = wf
+            if params.get("blind_yaw_only_walk", True):
+                wz_world = r20 * wx + r21 * wy + r22 * wz
+                wx = r20 * wz_world
+                wy = r21 * wz_world
+                wz = r22 * wz_world
+            self.wx, self.wy, self.wz = wx, wy, wz
+            self.last_vwx = vf[0] * self.shrink_v
+            self.last_vwy = vf[1] * self.shrink_v
+            self.last_vwz = vf[2] * self.shrink_v
+        else:
+            self.vb0x = self.vb0y = self.vb0z = 0.0
+            self.wx = self.wy = self.wz = 0.0
+            self.last_vwx = self.last_vwy = self.last_vwz = 0.0
+
+    def _vel_at(self, s: float):
+        ang_scale = self.tau_w * (1.0 - math.exp(-s / self.tau_w))
+        q_s = quat_norm_align(
+            quat_mul(self.qf, rotvec_to_quat(self.wx * ang_scale, self.wy * ang_scale, self.wz * ang_scale)),
+            self.qf,
+        )
+        rs00, rs01, rs02, rs10, rs11, rs12, rs20, rs21, rs22 = quat_to_rot(q_s)
+        v_dec = self.shrink_v * math.exp(-s / self.tau_v)
+        vwx = (rs00 * self.vb0x + rs01 * self.vb0y + rs02 * self.vb0z) * v_dec
+        vwy = (rs10 * self.vb0x + rs11 * self.vb0y + rs12 * self.vb0z) * v_dec
+        vwz = (rs20 * self.vb0x + rs21 * self.vb0y + rs22 * self.vb0z) * v_dec
+        return vwx, vwy, vwz, q_s
+
+    def eval(self, tau: float):
+        if tau <= 0.0:
+            return self.pf, self.qf
+        scale_s = self.shrink_v * self.tau_v * (1.0 - math.exp(-tau / self.tau_v))
+        p_str_x = self.pf[0] + self.vf[0] * scale_s
+        p_str_y = self.pf[1] + self.vf[1] * scale_s
+        p_str_z = self.pf[2] + self.vf[2] * scale_s
+        if not self.use_curv:
+            return (p_str_x, p_str_y, p_str_z), self.qf
+
+        if tau > self.last_tau:
+            dt = tau - self.last_tau
+            # Sub-step if gap > 0.05s for Simpson accuracy; otherwise single 3-point Simpson step
+            n_sub = 1 if dt <= 0.05 else max(2, int(math.ceil(dt / 0.05)))
+            h = dt / n_sub
+            s0 = self.last_tau
+            for _ in range(n_sub):
+                s_mid = s0 + 0.5 * h
+                s1 = s0 + h
+                vmx, vmy, vmz, _ = self._vel_at(s_mid)
+                v1x, v1y, v1z, q1 = self._vel_at(s1)
+                h6 = h * (1.0 / 6.0)
+                self.cx += (self.last_vwx + 4.0 * vmx + v1x) * h6
+                self.cy += (self.last_vwy + 4.0 * vmy + v1y) * h6
+                self.cz += (self.last_vwz + 4.0 * vmz + v1z) * h6
+                self.last_vwx, self.last_vwy, self.last_vwz = v1x, v1y, v1z
+                self.q_cur = q1
+                s0 = s1
+            self.last_tau = tau
+
+        ww = self.w_walk
+        omw = 1.0 - ww
+        return (
+            omw * p_str_x + ww * self.cx,
+            omw * p_str_y + ww * self.cy,
+            omw * p_str_z + ww * self.cz,
+        ), self.q_cur
 
 
 # ---------------------------------------------------------------------------
 # Alternative Ablation Modes (naive / mahony)
 # ---------------------------------------------------------------------------
 
-def _run_naive_or_mahony(t_s, acc_c, gyr_c, dup_mask, invalid_mask, fail_start, mode: str, end_init_idx: int):
+def _run_naive_or_mahony(t_s, acc_c, gyr_c, dup_mask, invalid_mask, fail_start, mode: str, end_init_idx: int, dt_nom: float):
     n = len(t_s)
-    p_out = np.zeros((n, 3), dtype=np.float64)
-    q_out = np.zeros((n, 4), dtype=np.float64)
+    ax_a, ay_a, az_a = acc_c
+    gx_a, gy_a, gz_a = gyr_c
+    p_out = [(0.0, 0.0, 0.0)] * n
+    q_out = [(1.0, 0.0, 0.0, 0.0)] * n
 
-    eskf = SparseESKF(DEFAULT_PARAMS)
+    eskf = SparseESKF(DEFAULT_PARAMS, dt_nom=dt_nom)
     eskf.initialize(t_s, acc_c, gyr_c, dup_mask, invalid_mask, end_init_idx, fail_start)
     q = eskf.q
     g_mag = eskf.g_mag
-    p = [0.0, 0.0, 0.0]
-    v = [0.0, 0.0, 0.0]
+    px = py = pz = 0.0
+    vx = vy = vz = 0.0
     prev_t = t_s[0]
 
     for k in range(n):
@@ -1764,25 +2457,26 @@ def _run_naive_or_mahony(t_s, acc_c, gyr_c, dup_mask, invalid_mask, fail_start, 
             dt = max(0.0, tk - prev_t) if (not dup_mask[k]) else 0.0
             prev_t = tk
             if dt > 0.0 and k < fail_start:
-                p[0] += v[0] * dt
-                p[1] += v[1] * dt
-                p[2] += v[2] * dt
-            p_out[k] = p
+                px += vx * dt
+                py += vy * dt
+                pz += vz * dt
+            p_out[k] = (px, py, pz)
             q_out[k] = q
             continue
 
         dt = min(0.05, max(0.0, tk - prev_t))
         prev_t = tk
-        ax, ay, az = float(acc_c[k, 0]), float(acc_c[k, 1]), float(acc_c[k, 2])
-        gx, gy, gz = float(gyr_c[k, 0]), float(gyr_c[k, 1]), float(gyr_c[k, 2])
+        ax, ay, az = ax_a[k], ay_a[k], az_a[k]
+        gx, gy, gz = gx_a[k], gy_a[k], gz_a[k]
         if dt > 0.0:
             if mode == "mahony":
                 r00, r01, r02, r10, r11, r12, r20, r21, r22 = quat_to_rot(q)
                 an = math.sqrt(ax * ax + ay * ay + az * az)
                 if an > 1e-6 and abs(an - g_mag) < 0.8:
-                    ex = (ay / an) * r22 - (az / an) * r21
-                    ey = (az / an) * r20 - (ax / an) * r22
-                    ez = (ax / an) * r21 - (ay / an) * r20
+                    inv_an = 1.0 / an
+                    ex = (ay * inv_an) * r22 - (az * inv_an) * r21
+                    ey = (az * inv_an) * r20 - (ax * inv_an) * r22
+                    ez = (ax * inv_an) * r21 - (ay * inv_an) * r20
                     gx += 0.5 * ex
                     gy += 0.5 * ey
                     gz += 0.5 * ez
@@ -1792,13 +2486,13 @@ def _run_naive_or_mahony(t_s, acc_c, gyr_c, dup_mask, invalid_mask, fail_start, 
             awy = r10 * ax + r11 * ay + r12 * az
             awz = r20 * ax + r21 * ay + r22 * az - g_mag
             dec = 1.0 if mode == "naive" else math.exp(-dt / 3.0)
-            v[0] = v[0] * dec + awx * dt
-            v[1] = v[1] * dec + awy * dt
-            v[2] = v[2] * dec + awz * dt
-            p[0] += v[0] * dt
-            p[1] += v[1] * dt
-            p[2] += v[2] * dt
-        p_out[k] = p
+            vx = vx * dec + awx * dt
+            vy = vy * dec + awy * dt
+            vz = vz * dec + awz * dt
+            px += vx * dt
+            py += vy * dt
+            pz += vz * dt
+        p_out[k] = (px, py, pz)
         q_out[k] = q
     return p_out, q_out
 
@@ -1828,6 +2522,19 @@ def _format_ts(ts_val, is_int_ts: bool, ts_scale: float) -> str:
     return f"{float(ts_val) * ts_scale:.9f}"
 
 
+def _find_end_init_idx(t_s, t0: float, t_init: float) -> int:
+    n = len(t_s)
+    target = t0 + t_init
+    lo, hi = 0, n
+    while lo < hi:
+        mid = (lo + hi) >> 1
+        if t_s[mid] < target:
+            lo = mid + 1
+        else:
+            hi = mid
+    return lo
+
+
 def run_pipeline(
     input_path: str,
     output_path: str,
@@ -1846,16 +2553,17 @@ def run_pipeline(
         pr["enable_zaru"] = False
         pr["enable_leveled_ped_nhc"] = False
         pr["enable_weinberg_bound"] = False
+        pr["enable_adaptive_denoise"] = False
 
     ts_list, is_int_ts, ts_scale, t_s, acc, gyr, parse_inv = load_imu_arrays(input_path)
     n = len(t_s)
     acc_clean, gyr_clean, dup_mask, invalid_mask, fail_start, noise_mult, dt_nom = preprocess_offline(
         t_s, acc, gyr, parse_inv, pr
     )
-    del acc, gyr
+    del acc, gyr, parse_inv
 
-    t0 = float(t_s[0])
-    end_init_idx = int(np.searchsorted(t_s - t0, pr["T_init"]))
+    t0 = t_s[0]
+    end_init_idx = _find_end_init_idx(t_s, t0, pr["T_init"])
     if end_init_idx < 2:
         end_init_idx = min(n, max(1, int(round(pr["T_init_fallback"] / max(dt_nom, 1e-4)))))
 
@@ -1865,7 +2573,7 @@ def run_pipeline(
 
     if ablation in ("naive", "mahony"):
         p_out, q_out = _run_naive_or_mahony(
-            t_s, acc_clean, gyr_clean, dup_mask, invalid_mask, fail_start, ablation, end_init_idx
+            t_s, acc_clean, gyr_clean, dup_mask, invalid_mask, fail_start, ablation, end_init_idx, dt_nom
         )
         with open(output_path, "w", encoding="utf-8", buffering=65536) as f:
             f.write("# timestamp tx ty tz qx qy qz qw\n")
@@ -1885,37 +2593,48 @@ def run_pipeline(
                 f.writelines(lines_buf)
         return
 
-    eskf = SparseESKF(pr)
-    eskf.initialize(t_s, acc_clean, gyr_clean, dup_mask, invalid_mask, end_init_idx, fail_start)
+    eskf = SparseESKF(pr, dt_nom=dt_nom)
+    eskf.initialize(
+        t_s, acc_clean, gyr_clean, dup_mask, invalid_mask, end_init_idx, fail_start, noise_mult=noise_mult
+    )
+
+    ax_a, ay_a, az_a = acc_clean
+    gx_a, gy_a, gz_a = gyr_clean
 
     last_valid_t = None
     last_valid_ax = last_valid_ay = last_valid_az = 0.0
     last_valid_gx = last_valid_gy = last_valid_gz = 0.0
     wx_s = wy_s = wz_s = 0.0
+    gap_wx = gap_wy = gap_wz = 0.0
+    in_invalid_gap = False
+
     p_last = (eskf.p[0], eskf.p[1], eskf.p[2])
     q_last = eskf.q
 
     active_limit = min(n, fail_start)
-    anchor = None
-    t_fail_anchor = float(t_s[max(0, active_limit - 1)]) if active_limit > 0 else t0
+    blind_pred = None
+    t_fail_anchor = t_s[active_limit - 1] if active_limit > 0 else t0
+    gap_dt_thresh = 2.5 * dt_nom
+    inv_dt_nom = 1.0 / max(dt_nom, 1e-4)
 
     with open(output_path, "w", encoding="utf-8", buffering=65536) as f:
         f.write("# timestamp tx ty tz qx qy qz qw\n")
         lines_buf = []
 
         for k in range(n):
-            tk = float(t_s[k])
+            tk = t_s[k]
             t_str = _format_ts(ts_list[k], is_int_ts, ts_scale)
 
-            # Terminal 5s all-zero blind block
+            # Terminal 5s blind block
             if k >= active_limit:
-                if anchor is None:
-                    anchor = make_blind_anchor(eskf, pr)
+                if blind_pred is None:
+                    anchor = make_blind_anchor(eskf, pr, dt_nom=dt_nom)
+                    blind_pred = IncrementalBlindPredictor(anchor, pr)
                     t_fail_anchor = last_valid_t if last_valid_t is not None else (
-                        float(t_s[active_limit - 1]) if active_limit > 0 else t0
+                        t_s[active_limit - 1] if active_limit > 0 else t0
                     )
-                tau = max(0.0, tk - t_fail_anchor)
-                pb, qb = eval_blind_pose(tau, anchor, pr)
+                tau = tk - t_fail_anchor
+                pb, qb = blind_pred.eval(tau if tau > 0.0 else 0.0)
                 lines_buf.append(
                     f"{t_str} {pb[0]:.6f} {pb[1]:.6f} {pb[2]:.6f} "
                     f"{qb[1]:.6f} {qb[2]:.6f} {qb[3]:.6f} {qb[0]:.6f}\n"
@@ -1925,7 +2644,7 @@ def run_pipeline(
                     lines_buf.clear()
                 continue
 
-            # Exact duplicate timestamp bypass
+            # Exact duplicate / non-monotonic timestamp bypass
             if dup_mask[k]:
                 lines_buf.append(
                     f"{t_str} {p_last[0]:.6f} {p_last[1]:.6f} {p_last[2]:.6f} "
@@ -1936,12 +2655,16 @@ def run_pipeline(
                     lines_buf.clear()
                 continue
 
-            # Interior invalid / malformed / extreme sample
+            # Interior invalid / malformed / extreme sample (decays omega continuously)
             if invalid_mask[k]:
                 if last_valid_t is not None and tk > last_valid_t:
                     dt_inv = tk - last_valid_t
-                    if dt_inv <= 0.5:
-                        eskf.propagate_gap(dt_inv, dt_nom, wx_s, wy_s, wz_s)
+                    if not in_invalid_gap:
+                        gap_wx, gap_wy, gap_wz = wx_s, wy_s, wz_s
+                        in_invalid_gap = True
+                    gap_wx, gap_wy, gap_wz = eskf.propagate_gap(
+                        min(dt_inv, 5.0), dt_nom, gap_wx, gap_wy, gap_wz, push_ring=True
+                    )
                     last_valid_t = tk
                 p_last = (eskf.p[0], eskf.p[1], eskf.p[2])
                 q_last = eskf.q
@@ -1954,42 +2677,47 @@ def run_pipeline(
                     lines_buf.clear()
                 continue
 
-            ax = float(acc_clean[k, 0])
-            ay = float(acc_clean[k, 1])
-            az = float(acc_clean[k, 2])
-            gx = float(gyr_clean[k, 0])
-            gy = float(gyr_clean[k, 1])
-            gz = float(gyr_clean[k, 2])
-            nm = float(noise_mult[k])
+            ax = ax_a[k]; ay = ay_a[k]; az = az_a[k]
+            gx = gx_a[k]; gy = gy_a[k]; gz = gz_a[k]
+            nm = noise_mult[k]
             t_el = tk - t0
 
             if last_valid_t is None:
                 last_valid_t = tk
                 last_valid_ax, last_valid_ay, last_valid_az = ax, ay, az
                 last_valid_gx, last_valid_gy, last_valid_gz = gx, gy, gz
+                in_invalid_gap = False
             else:
                 dt = tk - last_valid_t
-                if dt > 2.5 * dt_nom:
-                    if dt <= 0.35:
-                        # Clean offline linear sub-stepping across missing bursts (no double integration!)
-                        n_virt = max(1, int(round(dt / max(dt_nom, 1e-4))))
+                if dt > gap_dt_thresh:
+                    if dt <= 0.35 and (not in_invalid_gap):
+                        # Clean offline linear sub-stepping across short missing bursts
+                        n_virt = max(1, int(round(dt * inv_dt_nom)))
                         dt_v = dt / n_virt
+                        inv_nv = 1.0 / n_virt
                         t_start_seg = last_valid_t - t0
                         for step_i in range(1, n_virt + 1):
-                            alpha = step_i / float(n_virt)
-                            ax_i = (1.0 - alpha) * last_valid_ax + alpha * ax
-                            ay_i = (1.0 - alpha) * last_valid_ay + alpha * ay
-                            az_i = (1.0 - alpha) * last_valid_az + alpha * az
-                            gx_i = (1.0 - alpha) * last_valid_gx + alpha * gx
-                            gy_i = (1.0 - alpha) * last_valid_gy + alpha * gy
-                            gz_i = (1.0 - alpha) * last_valid_gz + alpha * gz
-                            eskf.step(dt_v, ax_i, ay_i, az_i, gx_i, gy_i, gz_i, nm, t_start_seg + step_i * dt_v)
+                            al = step_i * inv_nv
+                            om = 1.0 - al
+                            eskf.step(
+                                dt_v,
+                                om * last_valid_ax + al * ax,
+                                om * last_valid_ay + al * ay,
+                                om * last_valid_az + al * az,
+                                om * last_valid_gx + al * gx,
+                                om * last_valid_gy + al * gy,
+                                om * last_valid_gz + al * gz,
+                                nm,
+                                t_start_seg + step_i * dt_v,
+                            )
                     else:
-                        eskf.propagate_gap(dt - dt_nom, dt_nom, wx_s, wy_s, wz_s)
+                        w_use_x, w_use_y, w_use_z = (gap_wx, gap_wy, gap_wz) if in_invalid_gap else (wx_s, wy_s, wz_s)
+                        eskf.propagate_gap(dt - dt_nom, dt_nom, w_use_x, w_use_y, w_use_z, push_ring=True)
                         eskf.step(dt_nom, ax, ay, az, gx, gy, gz, nm, t_el)
                 else:
                     eskf.step(dt, ax, ay, az, gx, gy, gz, nm, t_el)
 
+                in_invalid_gap = False
                 last_valid_t = tk
                 last_valid_ax, last_valid_ay, last_valid_az = ax, ay, az
                 last_valid_gx, last_valid_gy, last_valid_gz = gx, gy, gz
@@ -2008,16 +2736,17 @@ def run_pipeline(
                 f.writelines(lines_buf)
                 lines_buf.clear()
 
-        # Optional legacy --append-blind mode (only when explicitly requested by fuzz/legacy tests)
+        # Optional legacy --append-blind mode
         if append_blind:
-            if anchor is None:
-                anchor = make_blind_anchor(eskf, pr)
+            if blind_pred is None:
+                anchor = make_blind_anchor(eskf, pr, dt_nom=dt_nom)
+                blind_pred = IncrementalBlindPredictor(anchor, pr)
             t_last_raw = ts_list[-1]
             dt_out = dt_nom if dt_nom > 1e-5 else 0.005
             n_blind = int(round(5.0 / dt_out))
             for b_step in range(1, n_blind + 1):
                 tau = b_step * dt_out
-                pb, qb = eval_blind_pose(tau, anchor, pr)
+                pb, qb = blind_pred.eval(tau)
                 if is_int_ts:
                     step_raw = int(round(tau / ts_scale))
                     t_str = _format_ts(t_last_raw + step_raw, True, ts_scale)
@@ -2045,13 +2774,23 @@ class _CustomParser(argparse.ArgumentParser):
 def main():
     parser = _CustomParser(description="Standalone Single-File 6-DoF Inertial Estimator (Track 3)")
     parser.add_argument("input", help="Path to input IMU CSV, directory, or ZIP")
-    parser.add_argument("output", nargs="?", default="estimated_trajectory.txt",
-                        help="Path to output trajectory file (default: estimated_trajectory.txt)")
-    parser.add_argument("--ablation", default="eskf_full",
-                        choices=["naive", "mahony", "eskf_basic", "eskf_full"],
-                        help="Filter ablation mode")
-    parser.add_argument("--append-blind", action="store_true",
-                        help="Legacy flag to append 5.0s blind poses past EOF (disabled by default per FAQ)")
+    parser.add_argument(
+        "output",
+        nargs="?",
+        default="estimated_trajectory.txt",
+        help="Path to output trajectory file (default: estimated_trajectory.txt)",
+    )
+    parser.add_argument(
+        "--ablation",
+        default="eskf_full",
+        choices=["naive", "mahony", "eskf_basic", "eskf_full"],
+        help="Filter ablation mode",
+    )
+    parser.add_argument(
+        "--append-blind",
+        action="store_true",
+        help="Legacy flag to append 5.0s blind poses past EOF (disabled by default per FAQ)",
+    )
     args = parser.parse_args()
 
     if not os.path.exists(args.input):
