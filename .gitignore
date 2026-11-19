@@ -27,7 +27,6 @@ __pycache__/
 .agent/
 review/
 scratch/
-docs/
 results/
 *.log
 .tmp_eval
