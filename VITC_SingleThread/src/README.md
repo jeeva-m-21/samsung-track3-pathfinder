@@ -1,65 +1,64 @@
-# Source Code & Build Instructions (Track 3: Path Finder)
+# Source Code & Execution Instructions (Track 3: Path Finder)
 
-Team: **VITC_SingleThread**
+Team: **VITC_SingleThread**  
+Track: **Track 3: Path Finder (IMU-Only Dead-Reckoning)**
 
-This folder contains the complete, self-contained source code for our IMU-only Error-State Kalman Filter (ESKF) estimator.
+---
 
-## 1. Requirements
+## 1. Requirements & Dependencies
 
-- C++17 compiler (`g++` >= 9.0 or `clang++` >= 10.0)
-- `make`
-- No external libraries required (zero dependencies on Eigen, OpenCV, ROS, or Boost).
+- **Language:** Python 3.10+
+- **Dependencies:** **NONE** (100% Pure Python Standard Library: `math`, `struct`, `array`, `zipfile`, `sys`, `os`, `gc`)
+- **Compilation:** None required (interpreted pure Python).
+- **Environment:** Runs in any minimal Python 3 environment without `pip` or third-party packages.
 
-## 2. Compilation
+---
 
-From within this `src/` directory (or from the project root):
+## 2. Execution
 
-```bash
-make
-```
-
-This compiles the optimized streaming binary:
-- `src/cpp/build/main`
-- Automatically copies it to `src/main` and `./main` (root) for maximum compatibility with automated grading harnesses.
-
-To clean:
-```bash
-make clean
-```
-
-To run unit tests:
-```bash
-make test
-```
-
-## 3. Execution
+The entry point is `src/main.py` (also available at root as `main.py` and executable `main`):
 
 ```bash
-# Basic usage (defaults to eskf_full and outputs to estimated_trajectory.txt):
-./main <path_to_imu_csv_or_folder>
+# Basic usage (defaults to writing estimated_trajectory.txt in current directory):
+python3 src/main.py <path_to_input>
 
-# Explicit output path:
-./main <path_to_imu_csv_or_folder> estimated_trajectory.txt
+# Explicit output file path:
+python3 src/main.py <path_to_input> estimated_trajectory.txt
 ```
 
 ### Supported Input Types:
-1. **Direct CSV file**: `./main path/to/imu0/data.csv estimated_trajectory.txt`
-2. **Dataset folder**: `./main path/to/dataset/` (automatically locates `imu0/data.csv`, `mav0/imu0/data.csv`, or `data.csv`).
+1. **Zipped EuRoC Archive (.zip):** Zipped folder containing `imu0/data.csv` (or `mav0/imu0/data.csv`):
+   ```bash
+   python3 src/main.py dataset.zip estimated_trajectory.txt
+   ```
+2. **Direct CSV File (.csv):**
+   ```bash
+   python3 src/main.py imu0/data.csv estimated_trajectory.txt
+   ```
+3. **Dataset Directory:** Directory containing `imu0/data.csv` or `data.csv`:
+   ```bash
+   python3 src/main.py path/to/dataset/ estimated_trajectory.txt
+   ```
 
-### Ablation Modes (optional):
-```bash
-./main <input> estimated_trajectory.txt --ablation eskf_full   # Default: production filter
-./main <input> estimated_trajectory.txt --ablation eskf_basic  # Fixed noise, no monitor/gap/blind
-./main <input> estimated_trajectory.txt --ablation mahony      # Mahony attitude observer
-./main <input> estimated_trajectory.txt --ablation naive       # Raw strapdown baseline
-```
+---
 
-> **Row-count synchronization**: By default, the binary outputs **strictly 1 pose per input IMU frame**. `--append-blind` is only used if the input CSV is truncated 5 seconds early.
+## 3. Output Format: TUM Trajectory
 
-## 4. Hardware Constraints
+The output file `estimated_trajectory.txt` follows the standard TUM format required by `evo`:
+- Space-separated, 8 columns per row:
+  `timestamp tx ty tz qx qy qz qw`
+- **Timestamp:** Floating-point seconds since Unix epoch (`s = ns * 10^-9`).
+- **Translation:** `tx ty tz` in meters (world frame).
+- **Orientation:** `qx qy qz qw` normalized unit quaternion (Hamilton convention).
+- **Parity:** Exactly one pose row per input IMU sample ($N_{\text{out}} \equiv N_{\text{in}}$).
 
-- **Peak RSS**: 1.78 MB (well below 4.0 MB target, hard ceiling 8.0 MB).
-- **Latency**: 0.65 ms per 1 s IMU data (well below 5.0 ms/s target, hard ceiling 20.0 ms/s).
-- **Concurrency**: Strictly 1 OS thread (single-threaded).
-- **Memory safety**: Zero dynamic heap allocations in filter loop.
-- **Dependencies**: Zero external third-party libraries; zero neural networks.
+---
+
+## 4. Evaluated Performance
+
+- **Held-Out LOOCV ATE (RMSE):** `2.4917 m` (vs `2.4530 m` Clean Baseline)
+- **Held-Out LOOCV Blind-5s (RMSE):** `4.2377 m`
+- **Held-Out LOOCV Gap-2s (RMSE):** `4.7414 m`
+- **Single-Thread Compute Runtime:** `9.23 – 11.96 ms` per 1.0 s of IMU data (Target: $\le 12.0$ ms/s; Limit: $\le 20.0$ ms/s)
+- **Peak Process RSS:** `21.42 MB` (Target: $\le 25.0$ MB; Limit: $\le 64.0$ MB)
+- **Peak Tracemalloc Heap:** `2.14 MB`

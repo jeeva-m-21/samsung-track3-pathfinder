@@ -1,29 +1,27 @@
 {
   "team": "VITC_SingleThread",
   "track": "Track 3: Path Finder (IMU-Only Dead-Reckoning)",
-  "implementation": "C++17, single thread, zero dynamic heap allocation",
-  "peak_rss_kb": 1808,
-  "cpu_ms_per_second_of_imu": 0.83,
-  "samples": 36398,
-  "data_duration_s": 181.99,
+  "implementation": "Python 3 Standard Library, single-threaded, zero external dependencies",
+  "peak_rss_mb": 21.42,
+  "peak_tracemalloc_heap_mb": 2.14,
+  "cpu_ms_per_second_of_imu": 10.5,
   "host": {
     "arch": "x86_64",
     "os": "Linux",
-    "compiler": "g++ (GCC C++17) -O3 -fno-exceptions -fno-rtti -static"
+    "runtime": "Python 3.10+ (Standard Library only: math, struct, array, zipfile, sys)"
   },
   "constraints_verification": {
     "peak_rss_budget_pass": true,
     "cpu_latency_budget_pass": true,
     "single_thread_pass": true,
-    "zero_dynamic_allocation_in_loop": true,
+    "zero_external_dependencies_pass": true,
     "format_validation_pass": true
   },
   "performance_metrics": {
-    "ate_rmse_m": 2.0006,
-    "blind_5s_rmse_m": 2.9229,
-    "dropout_rmse_m": 4.5832,
-    "improvement_vs_baseline_pct": 65.3
-  },
-  "commit": "fdd105c",
-  "release_tag": "submission-v2"
+    "held_out_loocv_ate_rmse_m": 2.4917,
+    "held_out_loocv_blind_5s_rmse_m": 4.2377,
+    "held_out_loocv_gap_2s_rmse_m": 4.7414,
+    "clean_baseline_ate_rmse_m": 2.4530,
+    "degradation_ate_penalty_cm": 3.8
+  }
 }
