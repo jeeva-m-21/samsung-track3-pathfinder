@@ -77,6 +77,7 @@ DEFAULT_PARAMS = {
 
     # Flight vertical velocity prior
     "enable_flight_vz_prior": True,
+    "enable_centripetal_comp": True,
     "flight_vz_sigma": 1.20,
 
     # Handheld / Pedestrian NHC + Posture-Invariant Frame + Weinberg Stride Speed
@@ -1704,12 +1705,32 @@ class SparseESKF:
         tau_base = pr["tilt_tau_a"] * max(1.0, min(3.0, noise_mult))
         q_clamped = max(0.0, min(1.0, quality))
         tau_eff = tau_base * (1.0 + 5.0 * (1.0 - q_clamped))
-        a_hat_norm = sqrt(acx * acx + acy * acy + acz * acz)
+
+        if pr.get("enable_centripetal_comp", False) and (not is_flight):
+            r00, r01, r02, r10, r11, r12, r20, r21, r22 = self._get_rot()
+            vx, vy, vz = v[0], v[1], v[2]
+            vbx = r00 * vx + r10 * vy + r20 * vz
+            vby = r01 * vx + r11 * vy + r21 * vz
+            vbz = r02 * vx + r12 * vy + r22 * vz
+            cpx = wy * vbz - wz * vby
+            cpy = wz * vbx - wx * vbz
+            cpz = wx * vby - wy * vbx
+            cp_mag = sqrt(cpx * cpx + cpy * cpy + cpz * cpz)
+            if cp_mag > 4.0:
+                sc_cp = 4.0 / cp_mag
+                cpx *= sc_cp; cpy *= sc_cp; cpz *= sc_cp
+            agx = acx - cpx
+            agy = acy - cpy
+            agz = acz - cpz
+            a_hat_norm = sqrt(agx * agx + agy * agy + agz * agz)
+        else:
+            agx, agy, agz = acx, acy, acz
+            a_hat_norm = sqrt(acx * acx + acy * acy + acz * acz)
 
         if do_tilt and w_mag < pr["tilt_omega_max"] and abs(a_hat_norm - self.g_mag) < tau_eff and a_hat_norm > 1e-6:
             r00, r01, r02, r10, r11, r12, r20, r21, r22 = self._get_rot()
             inv_an = 1.0 / a_hat_norm
-            zx, zy, zz = acx * inv_an, acy * inv_an, acz * inv_an
+            zx, zy, zz = agx * inv_an, agy * inv_an, agz * inv_an
             hx, hy, hz = r20, r21, r22
 
             if pr.get("enable_tilt_jam_fix", False) and not is_flight:
