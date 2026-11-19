@@ -75,8 +75,8 @@ DEFAULT_PARAMS = {
     "rotor_drag_sigma": 0.550,
     "rotor_drag_gate": 12.0,
 
-    # Optional soft flight vertical velocity prior (for LOOCV ablation)
-    "enable_flight_vz_prior": False,
+    # Flight vertical velocity prior
+    "enable_flight_vz_prior": True,
     "flight_vz_sigma": 1.20,
 
     # Handheld / Pedestrian NHC + Posture-Invariant Frame + Weinberg Stride Speed
