@@ -95,6 +95,7 @@ DEFAULT_PARAMS = {
     "vel_bound_sigma": 0.140,
 
     # Gravity tilt alignment
+    "enable_tilt_jam_fix": True,
     "tilt_tau_a": 0.295,
     "tilt_omega_max": 2.2,
     "tilt_sigma": 0.050,
@@ -1706,9 +1707,14 @@ class SparseESKF:
             zx, zy, zz = acx * inv_an, acy * inv_an, acz * inv_an
             hx, hy, hz = r20, r21, r22
 
-            sigma_tilt = pr["tilt_sigma"] / max(0.1, quality)
+            if pr.get("enable_tilt_jam_fix", False) and not is_flight:
+                sigma_tilt = pr["tilt_sigma"] / math.sqrt(max(0.05, quality))
+                a_scale_eff = pr["tilt_a_scale"] * max(1.0, noise_mult)
+            else:
+                sigma_tilt = pr["tilt_sigma"] / max(0.1, quality)
+                a_scale_eff = pr["tilt_a_scale"]
             var_tilt = (sigma_tilt * sigma_tilt) * min(2.0, r_scale) * tilt_r_mult
-            a_ratio = abs(a_hat_norm - self.g_mag) / pr["tilt_a_scale"]
+            a_ratio = abs(a_hat_norm - self.g_mag) / a_scale_eff
             w_ratio = w_mag / pr["tilt_omega_scale"]
             dyn_scale = 1.0 + pr["tilt_alpha_a"] * (a_ratio * a_ratio) + pr["tilt_alpha_omega"] * (w_ratio * w_ratio)
             base_rt = var_tilt * min(1e6, dyn_scale)
