@@ -66,6 +66,8 @@ DEFAULT_PARAMS = {
     "tau_ou_walk": 2.347,
     "flight_vibe_thresh": 0.40,
     "ped_energy_thresh": 0.20,
+    "enable_wiener_ou": True,
+    "wiener_ou_beta": 0.15,
 
     # Aerial aerodynamic rotor drag prior (disabled by default per EXP-PY15)
     "enable_rotor_drag": False,
@@ -1469,6 +1471,9 @@ class SparseESKF:
             cur_tau_ou = pr.get("tau_ou_walk", pr["tau_ou"])
         else:
             cur_tau_ou = pr["tau_ou"]
+
+        if pr.get("enable_wiener_ou", False) and noise_mult > 1.5:
+            cur_tau_ou = max(0.45, cur_tau_ou / (1.0 + pr.get("wiener_ou_beta", 0.15) * (noise_mult - 1.5)))
 
         # Dynamic velocity envelope (Weinberg biomechanical bound during walking)
         dyn_envelope = pr["max_velocity_mps"] + (0.5 * self.dyn_acc_ema if is_flight else 0.0)
