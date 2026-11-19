@@ -540,7 +540,7 @@ def load_imu_arrays(input_path: str):
 def _unpack_vec3_arrays(arr_or_tuple):
     """Accept either (x, y, z) tuple of array('d') or 2D list/array of rows."""
     if isinstance(arr_or_tuple, tuple) and len(arr_or_tuple) == 3 and not isinstance(arr_or_tuple[0], (int, float)):
-        return array("d", arr_or_tuple[0]), array("d", arr_or_tuple[1]), array("d", arr_or_tuple[2])
+        return arr_or_tuple[0], arr_or_tuple[1], arr_or_tuple[2]
     n = len(arr_or_tuple)
     xs = array("d", [0.0]) * n
     ys = array("d", [0.0]) * n
@@ -603,6 +603,7 @@ def preprocess_offline(t_s, acc, gyr, parse_inv, params: dict):
             fail_start = k
         else:
             break
+    del zero_mask, finite_mask
 
     # Defensive check: trailing bit-exact stuck sensor block >= 1.5 s at EOF
     if fail_start == n and n >= 250:
@@ -811,22 +812,22 @@ def preprocess_offline(t_s, acc, gyr, parse_inv, params: dict):
         noise_mult[k0] = first_kq
         noise_mult[k1] = first_kq
 
-    # 4. 3-tap median filter on gyro only
+    # 4. 3-tap median filter on gyro only (in-place via scalar temporaries)
     if params["enable_spike_filter"] and m >= 3:
-        gx_m = array("d", gx)
-        gy_m = array("d", gy)
-        gz_m = array("d", gz)
+        k0 = active_idx[0]
+        px, py, pz = gx[k0], gy[k0], gz[k0]
         for idx_k in range(1, m - 1):
             kp = active_idx[idx_k - 1]
             kc = active_idx[idx_k]
             kn = active_idx[idx_k + 1]
+            cx, cy, cz = gx[kc], gy[kc], gz[kc]
             if (t_s[kc] - t_s[kp] <= 0.05) and (t_s[kn] - t_s[kc] <= 0.05):
-                gx_m[kc] = median3(gx[kp], gx[kc], gx[kn])
-                gy_m[kc] = median3(gy[kp], gy[kc], gy[kn])
-                gz_m[kc] = median3(gz[kp], gz[kc], gz[kn])
-        gx, gy, gz = gx_m, gy_m, gz_m
+                gx[kc] = median3(px, cx, gx[kn])
+                gy[kc] = median3(py, cy, gy[kn])
+                gz[kc] = median3(pz, cz, gz[kn])
+            px, py, pz = cx, cy, cz
 
-    # 5. Noise-adaptive zero-phase 3-tap binomial denoising [0.25, 0.5, 0.25]
+    # 5. Noise-adaptive zero-phase 3-tap binomial denoising [0.25, 0.5, 0.25] (in-place)
     #    Strictly inactive on clean/low-noise data (noise_mult <= denoise_nm_start).
     if params.get("enable_adaptive_denoise", True) and m >= 3:
         nm_start = params.get("denoise_nm_start", 2.2)
@@ -837,36 +838,33 @@ def preprocess_offline(t_s, acc, gyr, parse_inv, params: dict):
                 has_high_noise = True
                 break
         if has_high_noise:
-            ax_d = array("d", ax)
-            ay_d = array("d", ay)
-            az_d = array("d", az)
-            gx_d = array("d", gx)
-            gy_d = array("d", gy)
-            gz_d = array("d", gz)
+            k0 = active_idx[0]
+            pax, pay, paz = ax[k0], ay[k0], az[k0]
+            pgx, pgy, pgz = gx[k0], gy[k0], gz[k0]
             for idx_k in range(1, m - 1):
                 kc = active_idx[idx_k]
+                cax, cay, caz = ax[kc], ay[kc], az[kc]
+                cgx, cgy, cgz = gx[kc], gy[kc], gz[kc]
                 nm_k = noise_mult[kc]
-                if nm_k <= nm_start:
-                    continue
-                kp = active_idx[idx_k - 1]
-                kn = active_idx[idx_k + 1]
-                if (t_s[kc] - t_s[kp] > 0.05) or (t_s[kn] - t_s[kc] > 0.05):
-                    continue
-                al = (nm_k - nm_start) * inv_span
-                if al > 1.0:
-                    al = 1.0
-                wa = 0.75 * al
-                wg = 0.45 * al
-                oma = 1.0 - wa
-                omg = 1.0 - wg
-                ax_d[kc] = oma * ax[kc] + wa * (0.25 * ax[kp] + 0.5 * ax[kc] + 0.25 * ax[kn])
-                ay_d[kc] = oma * ay[kc] + wa * (0.25 * ay[kp] + 0.5 * ay[kc] + 0.25 * ay[kn])
-                az_d[kc] = oma * az[kc] + wa * (0.25 * az[kp] + 0.5 * az[kc] + 0.25 * az[kn])
-                gx_d[kc] = omg * gx[kc] + wg * (0.25 * gx[kp] + 0.5 * gx[kc] + 0.25 * gx[kn])
-                gy_d[kc] = omg * gy[kc] + wg * (0.25 * gy[kp] + 0.5 * gy[kc] + 0.25 * gy[kn])
-                gz_d[kc] = omg * gz[kc] + wg * (0.25 * gz[kp] + 0.5 * gz[kc] + 0.25 * gz[kn])
-            ax, ay, az = ax_d, ay_d, az_d
-            gx, gy, gz = gx_d, gy_d, gz_d
+                if nm_k > nm_start:
+                    kp = active_idx[idx_k - 1]
+                    kn = active_idx[idx_k + 1]
+                    if (t_s[kc] - t_s[kp] <= 0.05) and (t_s[kn] - t_s[kc] <= 0.05):
+                        al = (nm_k - nm_start) * inv_span
+                        if al > 1.0:
+                            al = 1.0
+                        wa = 0.75 * al
+                        wg = 0.45 * al
+                        oma = 1.0 - wa
+                        omg = 1.0 - wg
+                        ax[kc] = oma * cax + wa * (0.25 * pax + 0.5 * cax + 0.25 * ax[kn])
+                        ay[kc] = oma * cay + wa * (0.25 * pay + 0.5 * cay + 0.25 * ay[kn])
+                        az[kc] = oma * caz + wa * (0.25 * paz + 0.5 * caz + 0.25 * az[kn])
+                        gx[kc] = omg * cgx + wg * (0.25 * pgx + 0.5 * cgx + 0.25 * gx[kn])
+                        gy[kc] = omg * cgy + wg * (0.25 * pgy + 0.5 * cgy + 0.25 * gy[kn])
+                        gz[kc] = omg * cgz + wg * (0.25 * pgz + 0.5 * cgz + 0.25 * gz[kn])
+                pax, pay, paz = cax, cay, caz
+                pgx, pgy, pgz = cgx, cgy, cgz
 
     # Compute nominal sampling period dt_nom
     pos_dts = []
@@ -978,6 +976,10 @@ class DegradationMonitor:
 
             self.quality = max(0.01, min(1.0, 1.0 / noise_ratio))
             self.kappa = max(1.0, min(self.kappa_max, noise_ratio))
+
+
+_ALL_IDX = (0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14)
+_NO_POS_IDX = (0, 1, 2, 3, 4, 5, 9, 10, 11, 12, 13, 14)
 
 
 class SparseESKF:
@@ -1397,11 +1399,11 @@ class SparseESKF:
         if dt <= 0.0:
             return
         self._step_idx += 1
-        high_rate = False
+        high_rate = (dt <= 0.008)
         do_nhc = True
-        do_tilt = True
+        do_tilt = (not high_rate) or ((self._step_idx & 1) == 1)
         nhc_r_mult = 1.0
-        tilt_r_mult = 1.0
+        tilt_r_mult = 0.5 if high_rate else 1.0
 
         pr = self.params
         bg = self.bg
@@ -1949,19 +1951,23 @@ class SparseESKF:
         r0: float,
         gate_threshold: float = 1e9, clear_pv: bool = False, nu: float = 5.0
     ):
-        """Fast 1D scalar Joseph-form update with exact Student-t DOF (m_dim = 1)."""
+        """Fast 1D scalar update with exact Student-t DOF (m_dim = 1)."""
         P = self.P
+        idx_set = _NO_POS_IDX if clear_pv else _ALL_IDX
         if clear_pv:
-            for ii in range(6, 9):
+            for ii in (6, 7, 8):
                 row_p = P[ii]
                 row_p[3] = row_p[4] = row_p[5] = 0.0
                 P[3][ii] = P[4][ii] = P[5][ii] = 0.0
+            self.hp0[6] = self.hp0[7] = self.hp0[8] = 0.0
+            self.k0[6] = self.k0[7] = self.k0[8] = 0.0
+            self.dx[6] = self.dx[7] = self.dx[8] = 0.0
 
         pb0 = P[blk]
         pb1 = P[blk + 1]
         pb2 = P[blk + 2]
         hp0 = self.hp0
-        for j in range(15):
+        for j in idx_set:
             hp0[j] = h00 * pb0[j] + h01 * pb1[j] + h02 * pb2[j]
 
         b0, b1, b2 = blk, blk + 1, blk + 2
@@ -1988,29 +1994,24 @@ class SparseESKF:
         inv_s = 1.0 / s00
         k0 = self.k0
         dx = self.dx
-        for i in range(15):
+        for i in idx_set:
             ki0 = hp0[i] * inv_s
             k0[i] = ki0
             dx[i] = ki0 * y0
 
-        hb0, hc0, hd0 = hp0[b0], hp0[b1], hp0[b2]
-        w0 = self.w0
-        for i in range(15):
+        n_idx = len(idx_set)
+        for i_idx in range(n_idx):
+            i = idx_set[i_idx]
             row_i = P[i]
             ki0 = k0[i]
-            uh0 = (
-                (row_i[b0] - ki0 * hb0) * h00
-                + (row_i[b1] - ki0 * hc0) * h01
-                + (row_i[b2] - ki0 * hd0) * h02
-            )
-            w0[i] = ki0 * r0 - uh0
-
-        for i in range(15):
-            row_i = P[i]
-            ki0 = k0[i]
-            wi0 = w0[i]
-            for j in range(i, 15):
-                val = row_i[j] - ki0 * hp0[j] + wi0 * k0[j]
+            diag_val = row_i[i] - ki0 * hp0[i]
+            if diag_val < 1e-12:
+                diag_val = 1e-12
+            row_i[i] = diag_val
+            P[i][i] = diag_val
+            for j_idx in range(i_idx + 1, n_idx):
+                j = idx_set[j_idx]
+                val = row_i[j] - ki0 * hp0[j]
                 row_i[j] = val
                 P[j][i] = val
 
@@ -2024,18 +2025,24 @@ class SparseESKF:
         gate_threshold: float = 1e9, clear_pv: bool = False, nu: float = 5.0
     ):
         P = self.P
+        idx_set = _NO_POS_IDX if clear_pv else _ALL_IDX
         if clear_pv:
-            for ii in range(6, 9):
+            for ii in (6, 7, 8):
                 row_p = P[ii]
                 row_p[3] = row_p[4] = row_p[5] = 0.0
                 P[3][ii] = P[4][ii] = P[5][ii] = 0.0
+            self.hp0[6] = self.hp0[7] = self.hp0[8] = 0.0
+            self.hp1[6] = self.hp1[7] = self.hp1[8] = 0.0
+            self.k0[6] = self.k0[7] = self.k0[8] = 0.0
+            self.k1[6] = self.k1[7] = self.k1[8] = 0.0
+            self.dx[6] = self.dx[7] = self.dx[8] = 0.0
 
         pb0 = P[blk]
         pb1 = P[blk + 1]
         pb2 = P[blk + 2]
         hp0 = self.hp0
         hp1 = self.hp1
-        for j in range(15):
+        for j in idx_set:
             v0, v1, v2 = pb0[j], pb1[j], pb2[j]
             hp0[j] = h00 * v0 + h01 * v1 + h02 * v2
             hp1[j] = h10 * v0 + h11 * v1 + h12 * v2
@@ -2083,37 +2090,26 @@ class SparseESKF:
         k0 = self.k0
         k1 = self.k1
         dx = self.dx
-        for i in range(15):
+        for i in idx_set:
             a, b = hp0[i], hp1[i]
             ki0 = a * si00 + b * si10
             ki1 = a * si01 + b * si11
             k0[i], k1[i] = ki0, ki1
             dx[i] = ki0 * y0 + ki1 * y1
 
-        hb0, hb1 = hp0[b0], hp1[b0]
-        hc0, hc1 = hp0[b1], hp1[b1]
-        hd0, hd1 = hp0[b2], hp1[b2]
-        w0 = self.w0
-        w1 = self.w1
-        for i in range(15):
+        n_idx = len(idx_set)
+        for i_idx in range(n_idx):
+            i = idx_set[i_idx]
             row_i = P[i]
             ki0, ki1 = k0[i], k1[i]
-            ub0 = row_i[b0] - (ki0 * hb0 + ki1 * hb1)
-            ub1 = row_i[b1] - (ki0 * hc0 + ki1 * hc1)
-            ub2 = row_i[b2] - (ki0 * hd0 + ki1 * hd1)
-            w0[i] = ki0 * r0 - (ub0 * h00 + ub1 * h01 + ub2 * h02)
-            w1[i] = ki1 * r1 - (ub0 * h10 + ub1 * h11 + ub2 * h12)
-
-        for i in range(15):
-            row_i = P[i]
-            ki0, ki1 = k0[i], k1[i]
-            wi0, wi1 = w0[i], w1[i]
-            for j in range(i, 15):
-                val = (
-                    row_i[j]
-                    - (ki0 * hp0[j] + ki1 * hp1[j])
-                    + (wi0 * k0[j] + wi1 * k1[j])
-                )
+            diag_val = row_i[i] - (ki0 * hp0[i] + ki1 * hp1[i])
+            if diag_val < 1e-12:
+                diag_val = 1e-12
+            row_i[i] = diag_val
+            P[i][i] = diag_val
+            for j_idx in range(i_idx + 1, n_idx):
+                j = idx_set[j_idx]
+                val = row_i[j] - (ki0 * hp0[j] + ki1 * hp1[j])
                 row_i[j] = val
                 P[j][i] = val
 
@@ -2129,11 +2125,19 @@ class SparseESKF:
         m_dim: int = 3, nu: float = 5.0
     ):
         P = self.P
+        idx_set = _NO_POS_IDX if clear_pv else _ALL_IDX
         if clear_pv:
-            for ii in range(6, 9):
+            for ii in (6, 7, 8):
                 row_p = P[ii]
                 row_p[3] = row_p[4] = row_p[5] = 0.0
                 P[3][ii] = P[4][ii] = P[5][ii] = 0.0
+            self.hp0[6] = self.hp0[7] = self.hp0[8] = 0.0
+            self.hp1[6] = self.hp1[7] = self.hp1[8] = 0.0
+            self.hp2[6] = self.hp2[7] = self.hp2[8] = 0.0
+            self.k0[6] = self.k0[7] = self.k0[8] = 0.0
+            self.k1[6] = self.k1[7] = self.k1[8] = 0.0
+            self.k2[6] = self.k2[7] = self.k2[8] = 0.0
+            self.dx[6] = self.dx[7] = self.dx[8] = 0.0
 
         pb0 = P[blk]
         pb1 = P[blk + 1]
@@ -2142,7 +2146,7 @@ class SparseESKF:
         hp0 = self.hp0
         hp1 = self.hp1
         hp2 = self.hp2
-        for j in range(15):
+        for j in idx_set:
             v0, v1, v2 = pb0[j], pb1[j], pb2[j]
             hp0[j] = h00 * v0 + h01 * v1 + h02 * v2
             hp1[j] = h10 * v0 + h11 * v1 + h12 * v2
@@ -2189,7 +2193,7 @@ class SparseESKF:
         k1 = self.k1
         k2 = self.k2
         dx = self.dx
-        for i in range(15):
+        for i in idx_set:
             a, b, c = hp0[i], hp1[i], hp2[i]
             ki0 = a * si00 + b * si10 + c * si20
             ki1 = a * si01 + b * si11 + c * si21
@@ -2197,32 +2201,19 @@ class SparseESKF:
             k0[i], k1[i], k2[i] = ki0, ki1, ki2
             dx[i] = ki0 * y0 + ki1 * y1 + ki2 * y2
 
-        hb0, hb1, hb2 = hp0[b0], hp1[b0], hp2[b0]
-        hc0, hc1, hc2 = hp0[b1], hp1[b1], hp2[b1]
-        hd0, hd1, hd2 = hp0[b2], hp1[b2], hp2[b2]
-        w0 = self.w0
-        w1 = self.w1
-        w2 = self.w2
-        for i in range(15):
+        n_idx = len(idx_set)
+        for i_idx in range(n_idx):
+            i = idx_set[i_idx]
             row_i = P[i]
             ki0, ki1, ki2 = k0[i], k1[i], k2[i]
-            ub0 = row_i[b0] - (ki0 * hb0 + ki1 * hb1 + ki2 * hb2)
-            ub1 = row_i[b1] - (ki0 * hc0 + ki1 * hc1 + ki2 * hc2)
-            ub2 = row_i[b2] - (ki0 * hd0 + ki1 * hd1 + ki2 * hd2)
-            w0[i] = ki0 * r0 - (ub0 * h00 + ub1 * h01 + ub2 * h02)
-            w1[i] = ki1 * r1 - (ub0 * h10 + ub1 * h11 + ub2 * h12)
-            w2[i] = ki2 * r2 - (ub0 * h20 + ub1 * h21 + ub2 * h22)
-
-        for i in range(15):
-            row_i = P[i]
-            ki0, ki1, ki2 = k0[i], k1[i], k2[i]
-            wi0, wi1, wi2 = w0[i], w1[i], w2[i]
-            for j in range(i, 15):
-                val = (
-                    row_i[j]
-                    - (ki0 * hp0[j] + ki1 * hp1[j] + ki2 * hp2[j])
-                    + (wi0 * k0[j] + wi1 * k1[j] + wi2 * k2[j])
-                )
+            diag_val = row_i[i] - (ki0 * hp0[i] + ki1 * hp1[i] + ki2 * hp2[i])
+            if diag_val < 1e-12:
+                diag_val = 1e-12
+            row_i[i] = diag_val
+            P[i][i] = diag_val
+            for j_idx in range(i_idx + 1, n_idx):
+                j = idx_set[j_idx]
+                val = row_i[j] - (ki0 * hp0[j] + ki1 * hp1[j] + ki2 * hp2[j])
                 row_i[j] = val
                 P[j][i] = val
 
