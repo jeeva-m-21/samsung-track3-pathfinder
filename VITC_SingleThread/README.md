@@ -3,17 +3,17 @@
 <div align="center">
 
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-3776AB.svg?logo=python&logoColor=white)](https://python.org)
-[![Dependencies](https://img.shields.io/badge/Dependencies-Zero%20(Pure%20Stdlib)-brightgreen.svg)](#-requirements--execution)
-[![Architecture](https://img.shields.io/badge/Algorithm-15--State%20ESKF-blueviolet.svg)](#-system-architecture)
-[![ATE RMSE](https://img.shields.io/badge/ATE%20RMSE-2.80%20m%20(-51.6%25)-success.svg)](#-50-run-evaluation-scorecard)
-[![Blind-5s RMSE](https://img.shields.io/badge/Blind--5s-4.88%20m%20(-73.0%25)-success.svg)](#-50-run-evaluation-scorecard)
-[![Latency](https://img.shields.io/badge/Single--Core%20Latency-14.5%20ms%2Fs-informational.svg)](#-single-thread-resource-profile)
-[![Memory](https://img.shields.io/badge/Peak%20RSS-23.2%20MB-informational.svg)](#-single-thread-resource-profile)
+[![Dependencies](https://img.shields.io/badge/Dependencies-Zero%20(Pure%20Stdlib)-brightgreen.svg)](#requirements-and-execution)
+[![Architecture](https://img.shields.io/badge/Algorithm-15--State%20ESKF-blueviolet.svg)](#system-architecture)
+[![ATE RMSE](https://img.shields.io/badge/ATE%20RMSE-2.80%20m%20(-51.6%25)-success.svg)](#50-run-evaluation-scorecard)
+[![Blind-5s RMSE](https://img.shields.io/badge/Blind--5s-4.88%20m%20(-73.0%25)-success.svg)](#50-run-evaluation-scorecard)
+[![Latency](https://img.shields.io/badge/Single--Core%20Latency-14.5%20ms%2Fs-informational.svg)](#single-thread-resource-profile)
+[![Memory](https://img.shields.io/badge/Peak%20RSS-23.2%20MB-informational.svg)](#single-thread-resource-profile)
 
 **Samsung Hackathon — Track 3: Path Finder**  
 *Team:* **`VITC_SingleThread`**
 
-[Submission Package](#-official-submission-package) • [Architecture](#-system-architecture) • [Evaluation Scorecard](#-50-run-evaluation-scorecard) • [Quick Start](#-requirements--execution) • [AI Disclosure](#-ai-disclosure-statement)
+[Submission Package](#official-submission-package) • [Architecture](#system-architecture) • [Evaluation Scorecard](#50-run-evaluation-scorecard) • [Quick Start](#requirements-and-execution) • [AI Disclosure](#ai-disclosure-statement)
 
 </div>
 
@@ -21,28 +21,14 @@
 
 > [!IMPORTANT]
 > **Key Achievements at a Glance (50 Multi-Seed Runs Across 5 Sequences)**:
-> - **51.6% ATE Error Reduction**: Trajectory ATE dropped from **`5.79 m → 2.80 m`** across aerial drones and pedestrian walking.
-> - **73.0% Blind-5s Cutoff Reduction**: Final 5s blackout error slashed from **`18.06 m → 4.88 m`** (terminal $V_2\_02$ blowup eliminated).
+> - **51.6% ATE Error Reduction**: Trajectory ATE dropped from **`5.79 m -> 2.80 m`** across aerial drones and pedestrian walking.
+> - **73.0% Blind-5s Cutoff Reduction**: Final 5s blackout error slashed from **`18.06 m -> 4.88 m`** (terminal `V2_02_medium` blowup eliminated).
 > - **Zero External Dependencies**: 100% pure Python standard library (`math`, `struct`, `array`, `zipfile`, `sys`). No `pip` install required.
-> - **Deterministic Embedded-Grade Rigor**: Runs in **`14.54 ms/s`** ($68\times$ real-time) using only **`23.25 MB`** peak memory.
+> - **Deterministic Embedded-Grade Rigor**: Runs in **`14.54 ms/s`** (68x real-time) using only **`23.25 MB`** peak memory.
 
 ---
 
-## 📋 Competition Checklist & Deliverables
-
-| Requirement | Artifact Location | Status |
-| :--- | :--- | :---: |
-| **Submission Package** | [`VITC_SingleThread.zip`](VITC_SingleThread.zip) & [`VITC_SingleThread/`](VITC_SingleThread/) *(Compliant theme layout)* | **VERIFIED PASS** ✅ |
-| **Source Code** | [`src/main.py`](VITC_SingleThread/src/main.py), [`main.py`](VITC_SingleThread/main.py), [`main`](VITC_SingleThread/main) | **VERIFIED PASS** ✅ |
-| **Presentation Deck** | [`docs/presentation/PRESENTATION.md`](docs/presentation/PRESENTATION.md) *(Slide Deck & Script)* | **VERIFIED PASS** ✅ |
-| **Video Walkthrough** | [`docs/video/VIDEO_DEMO.md`](docs/video/VIDEO_DEMO.md) *(Demonstration & Storyboard)* | **VERIFIED PASS** ✅ |
-| **AI Disclosure** | [`AI_DISCLOSURE.md`](AI_DISCLOSURE.md) & [Section Below](#-ai-disclosure-statement) | **VERIFIED PASS** ✅ |
-| **Complete Documentation** | [`README.md`](README.md) *(Architecture, visual plots, and benchmarks)* | **VERIFIED PASS** ✅ |
-| **Python SDK / CLI** | [`docs/SDK.md`](docs/SDK.md) *(Programmatic interface & API reference)* | **VERIFIED PASS** ✅ |
-
----
-
-## 🏗️ System Architecture
+## System Architecture
 
 A compact, streaming 15-state Error-State Kalman Filter (ESKF) pipeline engineered for zero dynamic heap churn and maximum resilience:
 
@@ -55,17 +41,19 @@ flowchart LR
 ```
 
 ### Core Algorithmic Components:
-1. **Front-End Degradation Monitor**: Causal 3-sample median filter suppressing impulse spikes without phase lag; continuous 2nd-difference noise multiplier estimation ($\hat{\sigma}$).
-2. **15-State Error Manifold**: $\delta\mathbf{x} = [\delta\boldsymbol{\theta}, \delta\mathbf{v}, \delta\mathbf{p}, \delta\mathbf{b}_g, \delta\mathbf{b}_a]^T \in \mathbb{R}^{15}$ integrated via 2nd-order Runge-Kutta strapdown mechanics with gravity removal.
+1. **Front-End Degradation Monitor**: Causal 3-sample median filter suppressing impulse spikes without phase lag; continuous 2nd-difference noise multiplier estimation (`sigma_hat`).
+2. **15-State Error Manifold**: 15-state error state `[delta_theta, delta_v, delta_p, delta_b_g, delta_b_a]^T` integrated via 2nd-order Runge-Kutta strapdown mechanics with gravity removal.
 3. **Centripetal-Compensated Tilt Alignment**:
-   $$\mathbf{a}_{\text{grav}} = (\mathbf{a}_{\text{meas}} - \mathbf{b}_a) - \boldsymbol{\omega} \times (R^T \hat{\mathbf{v}})$$
+   ```
+   a_grav = (a_meas - b_a) - omega x (R^T * v_hat)
+   ```
    *Analytically isolates true vertical tilt during pedestrian turns, eliminating false roll/pitch corruption.*
 4. **Multi-Domain Kinematic Priors**: Aerodynamic rotor drag damping for aerial drones alongside posture-invariant lateral NHC velocity damping and Weinberg stride bounding for walking.
 5. **Continuous Blackout Survival**: Bounded velocity decay via Ornstein-Uhlenbeck priors preserving heading curvature during extended packet loss and terminal blind cutoffs.
 
 ---
 
-## 📊 Visual Benchmarks & Trajectory Comparison
+## Visual Benchmarks and Trajectory Comparison
 
 <div align="center">
 
@@ -79,7 +67,7 @@ flowchart LR
 
 ---
 
-## 🏆 50-Run Evaluation Scorecard
+## 50-Run Evaluation Scorecard
 
 Evaluated across all **5 real competition sequences** over **10 random degradation seeds (`s1` through `s10`)** for a total of **50 individual trajectory runs** evaluated with the open-source `evo` evaluation suite:
 
@@ -92,27 +80,27 @@ Evaluated across all **5 real competition sequences** over **10 random degradati
 | **`V2_02_medium`** | Agile Drone | 10.79 m | **`2.735 ± 0.479 m`** | **`3.487 ± 0.483 m`** | **`4.919 ± 0.051 m`** | 13.1 ms/s |
 | **OVERALL (50 Runs)** | **All Domains** | **5.79 m** | **`2.805 ± 1.195 m`** | **`4.878 ± 5.855 m`** | **`5.001 ± 2.413 m`** | **`14.54 ms/s`** |
 
-- **Waypoint ATE RMSE ($\text{SE}(3)$)**: **`2.805 m`** (**`-51.6%`** vs baseline).
-- **Terminal 5s Blind Cutoff RMSE**: **`4.878 m`** (**`-73.0%`** vs baseline, beating the $5.194\text{ m}$ target).
-- **Dropout 2s Gap Blackout RMSE**: **`5.001 m`** (**`-68.1%`** vs baseline, beating the $6.625\text{ m}$ target).
+- **Waypoint ATE RMSE (SE(3))**: **`2.805 m`** (**`-51.6%`** vs baseline).
+- **Terminal 5s Blind Cutoff RMSE**: **`4.878 m`** (**`-73.0%`** vs baseline, beating the 5.194 m target).
+- **Dropout 2s Gap Blackout RMSE**: **`5.001 m`** (**`-68.1%`** vs baseline, beating the 6.625 m target).
 - **Relative Pose Error (1s Window)**: **`0.772 m/s`** average local drift across all runs.
 
 ---
 
-## ⚡ Single-Thread Resource Profile
+## Single-Thread Resource Profile
 
 Single-core pinned execution benchmarks on raw telemetry (`taskset -c 0`):
 
 | Resource Pillar | Competition Budget | **VITC_SingleThread Measured** | Margin / Status |
 | :--- | :---: | :---: | :---: |
-| **Single-Core Compute Latency** | $\le 20.0\text{ ms/s}$ | **`14.54 ms` / 1.0 s IMU** | **Pass (68× Real-Time)** ✅ |
-| **Peak Resident Set Size (RSS)** | $\le 64.0\text{ MB}$ | **`23.25 MB`** (`23,816 KB`) | **Pass (>63% Headroom)** ✅ |
-| **Peak Tracemalloc Heap** | $\le 8.0\text{ MB}$ | **`2.14 MB`** | **Pass (Embedded-Grade)** ✅ |
-| **Third-Party Dependencies** | Minimal | **Pure Python Stdlib Only** | **Pass (Zero `pip` req)** ✅ |
+| **Single-Core Compute Latency** | <= 20.0 ms/s | **`14.54 ms` / 1.0 s IMU** | Pass (68x Real-Time) |
+| **Peak Resident Set Size (RSS)** | <= 64.0 MB | **`23.25 MB`** (`23,816 KB`) | Pass (>63% Headroom) |
+| **Peak Tracemalloc Heap** | <= 8.0 MB | **`2.14 MB`** | Pass (Embedded-Grade) |
+| **Third-Party Dependencies** | Minimal | **Pure Python Stdlib Only** | Pass (Zero `pip` req) |
 
 ---
 
-## 🚀 Requirements & Execution
+## Requirements and Execution
 
 ### 1. Requirements
 - **Python 3.10+** (Pure Standard Library: `math`, `struct`, `array`, `zipfile`, `sys`, `os`, `gc`).
@@ -150,13 +138,13 @@ Outputs 8-column space-separated poses matching the exact input timestamp sequen
 1403636579.005000000 -0.000000 -0.000000 0.000000 -0.000018 0.000021 -0.000000 1.000000
 ...
 ```
-- **Strict Parity**: Exactly 1 pose per input IMU sample ($N_{\text{out}} \equiv N_{\text{in}}$).
-- **High-Precision Timestamps**: Floating-point seconds from nanoseconds ($s = \text{ns} \times 10^{-9}$).
-- **Normalized Quaternions**: Unit quaternions in Hamilton convention ($\|q\| = 1.000000 \pm 10^{-6}$).
+- **Strict Parity**: Exactly 1 pose per input IMU sample (N_out == N_in).
+- **High-Precision Timestamps**: Floating-point seconds from nanoseconds (`seconds = nanoseconds * 1e-9`).
+- **Normalized Quaternions**: Unit quaternions in Hamilton convention (`||q|| = 1.000000 ± 1e-6`).
 
 ---
 
-## 🔍 Trajectory Evaluation with `evo`
+## Trajectory Evaluation with evo
 
 Verify trajectory estimates directly against open-source `evo`:
 
@@ -170,7 +158,7 @@ evo_rpe tum groundtruth.txt estimated_trajectory.txt -a -d 200 -u f
 
 ---
 
-## 📦 Official Submission Package
+## Official Submission Package
 
 The standalone submission package [`VITC_SingleThread.zip`](VITC_SingleThread.zip) is packaged as follows:
 
@@ -188,7 +176,7 @@ VITC_SingleThread.zip
 
 ---
 
-## 🤖 AI Disclosure Statement
+## AI Disclosure Statement
 
 In compliance with hackathon rules and AI disclosure guidelines:
 - **Core Algorithm**: **0% Neural Networks**. The filter is 100% deterministic, classical physics-based inertial estimation (15-state Error-State Kalman Filter on Lie manifolds, Runge-Kutta strapdown mechanics, and analytical centripetal compensation).
@@ -197,7 +185,7 @@ In compliance with hackathon rules and AI disclosure guidelines:
 
 ---
 
-## 📄 License & Team
+## License and Team
 
 - **Team Name**: `VITC_SingleThread`
 - **Track**: Track 3: Path Finder (IMU-Only Dead-Reckoning)

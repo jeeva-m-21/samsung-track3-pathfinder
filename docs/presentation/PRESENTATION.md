@@ -53,12 +53,12 @@
 | :--- | :--- | :---: | :---: | :---: |
 | **`MH_01_easy`** (Drone) | ATE RMSE | 4.31 m | **3.57 m** | **-17.2%** |
 | **`V1_01_easy`** (Drone) | ATE RMSE | 2.45 m | **1.77 m** | **-27.8%** |
-| **`V2_02_medium`** (Agile) | Blind-5s RMSE | 31.50 m | **3.49 m** | **-88.9%** 🏆 |
+| **`V2_02_medium`** (Agile) | Blind-5s RMSE | 31.50 m | **3.49 m** | **-88.9%** |
 | **`room1`** (Pedestrian) | ATE RMSE | 5.53 m | **4.43 m** | **-19.9%** |
 | **`room2`** (Pedestrian) | Blind-5s RMSE | 5.98 m | **4.00 m** | **-33.1%** |
-| **OVERALL (50 Runs)** | **ATE RMSE** | **5.79 m** | **`2.80 m`** | **-51.6%** 🏆 |
-| **OVERALL (50 Runs)** | **Final 5s Blind** | **18.06 m** | **`4.88 m`** | **-73.0%** 🏆 |
-| **OVERALL (50 Runs)** | **2s Gap Blackout** | **15.65 m** | **`5.00 m`** | **-68.1%** 🏆 |
+| **OVERALL (50 Runs)** | **ATE RMSE** | **5.79 m** | **`2.80 m`** | **-51.6%** |
+| **OVERALL (50 Runs)** | **Final 5s Blind** | **18.06 m** | **`4.88 m`** | **-73.0%** |
+| **OVERALL (50 Runs)** | **2s Gap Blackout** | **15.65 m** | **`5.00 m`** | **-68.1%** |
 
 ---
 
