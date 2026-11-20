@@ -2,49 +2,70 @@
 
 <div align="center">
 
-[![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue.svg?logo=python&logoColor=white)](https://python.org)
-[![Dependencies](https://img.shields.io/badge/Dependencies-Zero%20(Standard%20Library)-success.svg)](#requirements--dependencies)
-[![Architecture](https://img.shields.io/badge/Architecture-15--State%20ESKF-blueviolet.svg)](#system-architecture)
-[![ATE RMSE](https://img.shields.io/badge/ATE%20RMSE-2.80%20m-brightgreen.svg)](#-50-run-comprehensive-evaluation-scorecard)
-[![Blind-5s RMSE](https://img.shields.io/badge/Blind--5s-4.88%20m-brightgreen.svg)](#-50-run-comprehensive-evaluation-scorecard)
-[![Latency](https://img.shields.io/badge/Latency-14.5%20ms%2Fs-informational.svg)](#single-thread-resource-profile)
-[![Memory](https://img.shields.io/badge/Peak%20RSS-23.2%20MB-informational.svg)](#single-thread-resource-profile)
+[![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-3776AB.svg?logo=python&logoColor=white)](https://python.org)
+[![Dependencies](https://img.shields.io/badge/Dependencies-Zero%20(Pure%20Stdlib)-brightgreen.svg)](#-requirements--execution)
+[![Architecture](https://img.shields.io/badge/Algorithm-15--State%20ESKF-blueviolet.svg)](#-system-architecture)
+[![ATE RMSE](https://img.shields.io/badge/ATE%20RMSE-2.80%20m%20(-51.6%25)-success.svg)](#-50-run-evaluation-scorecard)
+[![Blind-5s RMSE](https://img.shields.io/badge/Blind--5s-4.88%20m%20(-73.0%25)-success.svg)](#-50-run-evaluation-scorecard)
+[![Latency](https://img.shields.io/badge/Single--Core%20Latency-14.5%20ms%2Fs-informational.svg)](#-single-thread-resource-profile)
+[![Memory](https://img.shields.io/badge/Peak%20RSS-23.2%20MB-informational.svg)](#-single-thread-resource-profile)
 
 **Samsung Hackathon — Track 3: Path Finder**  
 *Team:* **`VITC_SingleThread`**
 
-[Submission Package](#-official-submission-package) • [Architecture](#-system-architecture) • [Evaluation Scorecard](#-50-run-comprehensive-evaluation-scorecard) • [Quick Start](#-quick-start--execution) • [AI Disclosure](#-ai-disclosure-statement)
+[Submission Package](#-official-submission-package) • [Architecture](#-system-architecture) • [Evaluation Scorecard](#-50-run-evaluation-scorecard) • [Quick Start](#-requirements--execution) • [AI Disclosure](#-ai-disclosure-statement)
 
 </div>
 
 ---
 
-## 📋 Competition Checklist & Submission Manifest
+> [!IMPORTANT]
+> **Key Achievements at a Glance (50 Multi-Seed Runs Across 5 Sequences)**:
+> - **51.6% ATE Error Reduction**: Trajectory ATE dropped from **`5.79 m → 2.80 m`** across aerial drones and pedestrian walking.
+> - **73.0% Blind-5s Cutoff Reduction**: Final 5s blackout error slashed from **`18.06 m → 4.88 m`** (terminal $V_2\_02$ blowup eliminated).
+> - **Zero External Dependencies**: 100% pure Python standard library (`math`, `struct`, `array`, `zipfile`, `sys`). No `pip` install required.
+> - **Deterministic Embedded-Grade Rigor**: Runs in **`14.54 ms/s`** ($68\times$ real-time) using only **`23.25 MB`** peak memory.
 
-| Requirement | Deliverable Location | Status |
+---
+
+## 📋 Competition Checklist & Deliverables
+
+| Requirement | Artifact Location | Status |
 | :--- | :--- | :---: |
-| **Submission Package** | [`VITC_SingleThread.zip`](file:///home/jeeva/projects/samsung_hackathon/VITC_SingleThread.zip) & [`VITC_SingleThread/`](file:///home/jeeva/projects/samsung_hackathon/VITC_SingleThread/) *(Theme layout)* | **VERIFIED PASS** ✅ |
-| **Source Code** | [`src/main.py`](file:///home/jeeva/projects/samsung_hackathon/VITC_SingleThread/src/main.py), [`main.py`](file:///home/jeeva/projects/samsung_hackathon/VITC_SingleThread/main.py) *(Pure Python Standard Library)* | **VERIFIED PASS** ✅ |
-| **Presentation** | [`docs/presentation/PRESENTATION.md`](file:///home/jeeva/projects/samsung_hackathon/docs/presentation/PRESENTATION.md) *(Slide Deck & Script)* | **VERIFIED PASS** ✅ |
-| **Video Walkthrough** | [`docs/video/VIDEO_DEMO.md`](file:///home/jeeva/projects/samsung_hackathon/docs/video/VIDEO_DEMO.md) *(Demo & Storyboard Guide)* | **VERIFIED PASS** ✅ |
-| **AI Disclosure** | [`AI_DISCLOSURE.md`](file:///home/jeeva/projects/samsung_hackathon/AI_DISCLOSURE.md) & [Section Below](#-ai-disclosure-statement) | **VERIFIED PASS** ✅ |
-| **Topnotch README** | [`README.md`](file:///home/jeeva/projects/samsung_hackathon/README.md) *(System documentation & plots)* | **VERIFIED PASS** ✅ |
-| **SDK / CLI** | [`docs/SDK.md`](file:///home/jeeva/projects/samsung_hackathon/docs/SDK.md) *(Programmatic Python Interface)* | **VERIFIED PASS** ✅ |
+| **Submission Package** | [`VITC_SingleThread.zip`](VITC_SingleThread.zip) & [`VITC_SingleThread/`](VITC_SingleThread/) *(Compliant theme layout)* | **VERIFIED PASS** ✅ |
+| **Source Code** | [`src/main.py`](VITC_SingleThread/src/main.py), [`main.py`](VITC_SingleThread/main.py), [`main`](VITC_SingleThread/main) | **VERIFIED PASS** ✅ |
+| **Presentation Deck** | [`docs/presentation/PRESENTATION.md`](docs/presentation/PRESENTATION.md) *(Slide Deck & Script)* | **VERIFIED PASS** ✅ |
+| **Video Walkthrough** | [`docs/video/VIDEO_DEMO.md`](docs/video/VIDEO_DEMO.md) *(Demonstration & Storyboard)* | **VERIFIED PASS** ✅ |
+| **AI Disclosure** | [`AI_DISCLOSURE.md`](AI_DISCLOSURE.md) & [Section Below](#-ai-disclosure-statement) | **VERIFIED PASS** ✅ |
+| **Complete Documentation** | [`README.md`](README.md) *(Architecture, visual plots, and benchmarks)* | **VERIFIED PASS** ✅ |
+| **Python SDK / CLI** | [`docs/SDK.md`](docs/SDK.md) *(Programmatic interface & API reference)* | **VERIFIED PASS** ✅ |
 
 ---
 
-## 🌟 Executive Summary
+## 🏗️ System Architecture
 
-In pure inertial dead-reckoning, navigation systems must reconstruct 3D trajectories ($x, y, z, q$) using **only 6-axis IMU data** (3-axis gyroscope and 3-axis accelerometer at 200 Hz) without GPS, cameras, LiDAR, magnetometers, or neural networks. Double-integrating noisy accelerometer measurements causes explosive quadratic drift ($\sim \frac{1}{2} a t^2$), diverging by hundreds of meters within seconds under synthetic degradations (spikes, bias walk, noise escalation, dropouts, and terminal blackouts).
+A compact, streaming 15-state Error-State Kalman Filter (ESKF) pipeline engineered for zero dynamic heap churn and maximum resilience:
 
-**VITC_SingleThread** is an ultra-lightweight, embedded-grade **15-State Error-State Kalman Filter (ESKF)** written in **100% pure Python standard library** with **zero third-party dependencies**. It introduces:
-1. **Centripetal-Compensated Tilt Alignment**: Analytically subtracts $\boldsymbol{\omega} \times \mathbf{v}_B$ from measured specific force before gravity normalization, isolating true vertical tilt during pedestrian turns.
-2. **Dual-Domain Kinematic Priors**: Aerodynamic quadrotor rotor drag damping for aerial drones alongside posture-invariant non-holonomic velocity damping and gait-bounded Weinberg stride priors for walking.
-3. **Wiener Noise-Adaptive Process Noise ($Q$)**: Dynamically rescales error covariances and Student-$t$ update gates proportional to real-time high-frequency noise estimation.
+```mermaid
+flowchart LR
+    A["<b>Raw IMU</b><br/>(200 Hz Telemetry)"] --> B["<b>Signal Front-End</b><br/>Spike filter & noise scaling"]
+    B --> C["<b>Strapdown & ESKF</b><br/>15-state error manifold"]
+    C --> D["<b>Adaptive Updates</b><br/>Tilt & kinematic priors"]
+    D --> E["<b>TUM Trajectory</b><br/>8 cols (N_out == N_in)"]
+```
+
+### Core Algorithmic Components:
+1. **Front-End Degradation Monitor**: Causal 3-sample median filter suppressing impulse spikes without phase lag; continuous 2nd-difference noise multiplier estimation ($\hat{\sigma}$).
+2. **15-State Error Manifold**: $\delta\mathbf{x} = [\delta\boldsymbol{\theta}, \delta\mathbf{v}, \delta\mathbf{p}, \delta\mathbf{b}_g, \delta\mathbf{b}_a]^T \in \mathbb{R}^{15}$ integrated via 2nd-order Runge-Kutta strapdown mechanics with gravity removal.
+3. **Centripetal-Compensated Tilt Alignment**:
+   $$\mathbf{a}_{\text{grav}} = (\mathbf{a}_{\text{meas}} - \mathbf{b}_a) - \boldsymbol{\omega} \times (R^T \hat{\mathbf{v}})$$
+   *Analytically isolates true vertical tilt during pedestrian turns, eliminating false roll/pitch corruption.*
+4. **Multi-Domain Kinematic Priors**: Aerodynamic rotor drag damping for aerial drones alongside posture-invariant lateral NHC velocity damping and Weinberg stride bounding for walking.
+5. **Continuous Blackout Survival**: Bounded velocity decay via Ornstein-Uhlenbeck priors preserving heading curvature during extended packet loss and terminal blind cutoffs.
 
 ---
 
-## 📊 Visual Benchmarks & Trajectory Plots
+## 📊 Visual Benchmarks & Trajectory Comparison
 
 <div align="center">
 
@@ -58,9 +79,9 @@ In pure inertial dead-reckoning, navigation systems must reconstruct 3D trajecto
 
 ---
 
-## 🏆 50-Run Comprehensive Evaluation Scorecard
+## 🏆 50-Run Evaluation Scorecard
 
-Evaluated across all **5 real competition sequences** over **10 random degradation seeds (`s1` through `s10`)** for a total of **50 individual trajectory evaluations** scored using the open-source `evo` evaluation suite:
+Evaluated across all **5 real competition sequences** over **10 random degradation seeds (`s1` through `s10`)** for a total of **50 individual trajectory runs** evaluated with the open-source `evo` evaluation suite:
 
 | Sequence | Domain | Baseline ATE | **VITC_SingleThread ATE** | Final 5s Blind RMSE | 2s Gap RMSE | Latency |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: |
@@ -71,11 +92,10 @@ Evaluated across all **5 real competition sequences** over **10 random degradati
 | **`V2_02_medium`** | Agile Drone | 10.79 m | **`2.735 ± 0.479 m`** | **`3.487 ± 0.483 m`** | **`4.919 ± 0.051 m`** | 13.1 ms/s |
 | **OVERALL (50 Runs)** | **All Domains** | **5.79 m** | **`2.805 ± 1.195 m`** | **`4.878 ± 5.855 m`** | **`5.001 ± 2.413 m`** | **`14.54 ms/s`** |
 
-### Key Metric Achievements:
-- **Waypoint Trajectory ATE RMSE ($\text{SE}(3)$)**: **`2.805 m`** (down from $5.79\text{ m}$ baseline, **-51.6%** error reduction).
-- **Terminal 5s Blind Cutoff RMSE**: **`4.878 m`** (down from $18.06\text{ m}$ baseline, **-73.0%** error reduction).
-- **Dropout 2s Gap Blackout RMSE**: **`5.001 m`** (down from $15.65\text{ m}$ baseline, **-68.1%** error reduction).
-- **Relative Pose Error (1s Translation RPE)**: **`0.772 m/s`** local drift across all runs.
+- **Waypoint ATE RMSE ($\text{SE}(3)$)**: **`2.805 m`** (**`-51.6%`** vs baseline).
+- **Terminal 5s Blind Cutoff RMSE**: **`4.878 m`** (**`-73.0%`** vs baseline, beating the $5.194\text{ m}$ target).
+- **Dropout 2s Gap Blackout RMSE**: **`5.001 m`** (**`-68.1%`** vs baseline, beating the $6.625\text{ m}$ target).
+- **Relative Pose Error (1s Window)**: **`0.772 m/s`** average local drift across all runs.
 
 ---
 
@@ -83,57 +103,33 @@ Evaluated across all **5 real competition sequences** over **10 random degradati
 
 Single-core pinned execution benchmarks on raw telemetry (`taskset -c 0`):
 
-| Resource Pillar | Competition Ceiling | Internal Target | **VITC_SingleThread Measured** | Margin / Status |
-| :--- | :---: | :---: | :---: | :---: |
-| **Compute Latency** | $\le 20.0\text{ ms/s}$ | $\le 15.0\text{ ms/s}$ | **`14.54 ms` / 1.0 s IMU** | **Pass (68× Real-Time)** ✅ |
-| **Peak Resident Set Size (RSS)** | $\le 64.0\text{ MB}$ | $\le 25.0\text{ MB}$ | **`23.25 MB`** (`23,816 KB`) | **Pass (>63% Headroom)** ✅ |
-| **Peak Tracemalloc Heap** | $\le 8.0\text{ MB}$ | $\le 2.5\text{ MB}$ | **`2.14 MB`** | **Pass (Embedded-Grade)** ✅ |
-| **Dependencies** | Minimal | Zero 3rd-Party | **Pure Python Stdlib Only** | **Pass (Zero `pip` req)** ✅ |
+| Resource Pillar | Competition Budget | **VITC_SingleThread Measured** | Margin / Status |
+| :--- | :---: | :---: | :---: |
+| **Single-Core Compute Latency** | $\le 20.0\text{ ms/s}$ | **`14.54 ms` / 1.0 s IMU** | **Pass (68× Real-Time)** ✅ |
+| **Peak Resident Set Size (RSS)** | $\le 64.0\text{ MB}$ | **`23.25 MB`** (`23,816 KB`) | **Pass (>63% Headroom)** ✅ |
+| **Peak Tracemalloc Heap** | $\le 8.0\text{ MB}$ | **`2.14 MB`** | **Pass (Embedded-Grade)** ✅ |
+| **Third-Party Dependencies** | Minimal | **Pure Python Stdlib Only** | **Pass (Zero `pip` req)** ✅ |
 
 ---
 
-## 🏗️ System Architecture
-
-```mermaid
-flowchart TD
-    A["Raw IMU Telemetry (200 Hz)<br/>(wx, wy, wz, ax, ay, az)"] --> B["Front-End Degradation Monitor<br/>- Causal 3-sample median filter<br/>- 2nd-difference noise multiplier estimation"]
-    B --> C["Static / Motion Initializer<br/>- Gravity magnitude calibration<br/>- Initial roll/pitch tilt alignment"]
-    C --> D["Midpoint Strapdown Kinematics<br/>- 2nd-order Runge-Kutta quaternion integration<br/>- Gravity compensation in world frame"]
-    D --> E["15-State Error-State Kalman Filter (ESKF)<br/>State: [q, v, p, b_g, b_a] in R^15"]
-    
-    subgraph Updates["Adaptive Measurement Updates"]
-        F1["Zero Velocity Update (ZUPT)<br/>Static stance detector"]
-        F2["Centripetal-Compensated Tilt<br/>a_grav = a_c - omega x v_B"]
-        F3["Pedestrian NHC & Speed Clamp<br/>Dual-axis lateral/vertical damping"]
-        F4["Drone Rotor Drag & Vz Prior<br/>Vertical velocity bounded prior"]
-    end
-
-    E <--> Updates
-    E --> G["Dropout / Blackout Survival<br/>- Sub-stepping continuous gap bridge<br/>- Curvature preservation & OU velocity decay"]
-    G --> H["TUM Trajectory Formatter<br/>8 space-separated columns (N_out == N_in)"]
-```
-
----
-
-## 🚀 Quick Start & Execution
+## 🚀 Requirements & Execution
 
 ### 1. Requirements
-- **Python 3.10+**
-- **Zero External Dependencies**: Uses only standard library modules (`math`, `struct`, `array`, `zipfile`, `sys`, `os`, `gc`).
-- Runs immediately in any fresh Ubuntu/Debian/Fedora installation without creating a virtual environment or running `pip install`.
+- **Python 3.10+** (Pure Standard Library: `math`, `struct`, `array`, `zipfile`, `sys`, `os`, `gc`).
+- Runs immediately on bare Linux environments without creating a virtualenv or running `pip install`.
 
 ### 2. Basic Execution
 ```bash
-# Direct execution using root standalone binary:
+# Direct execution via standalone executable:
 ./VITC_SingleThread/main path/to/input.zip estimated_trajectory.txt
 
-# Or execution using standard Python 3:
+# Or execution using Python 3:
 python3 VITC_SingleThread/src/main.py path/to/input.zip estimated_trajectory.txt
 ```
 
-### 3. Supported Input Formats
+### 3. Supported Input Telemetry
 1. **Zipped EuRoC Telemetry Archive (`.zip`)**:
-   Standard zipped folder containing `imu0/data.csv` (or `mav0/imu0/data.csv`):
+   Zipped archive containing `imu0/data.csv` (or `mav0/imu0/data.csv`):
    ```bash
    python3 VITC_SingleThread/main.py dataset.zip estimated_trajectory.txt
    ```
@@ -146,8 +142,8 @@ python3 VITC_SingleThread/src/main.py path/to/input.zip estimated_trajectory.txt
    python3 VITC_SingleThread/main.py path/to/dataset/ estimated_trajectory.txt
    ```
 
-### 4. Output Trajectory Format (TUM Format)
-Outputs standard space-separated 8-column TUM format required by `evo`:
+### 4. Output Trajectory (TUM Format)
+Outputs 8-column space-separated poses matching the exact input timestamp sequence:
 ```text
 # timestamp tx ty tz qx qy qz qw
 1403636579.000000000 0.000000 0.000000 0.000000 -0.000009 0.000005 0.000000 1.000000
@@ -155,8 +151,8 @@ Outputs standard space-separated 8-column TUM format required by `evo`:
 ...
 ```
 - **Strict Parity**: Exactly 1 pose per input IMU sample ($N_{\text{out}} \equiv N_{\text{in}}$).
-- **High-Precision Timestamps**: Seconds converted from integer nanoseconds with 9 decimal places ($s = \text{ns} \times 10^{-9}$).
-- **Unit Quaternions**: Normalized Hamilton unit quaternions ($\|q\| = 1.000000 \pm 10^{-6}$).
+- **High-Precision Timestamps**: Floating-point seconds from nanoseconds ($s = \text{ns} \times 10^{-9}$).
+- **Normalized Quaternions**: Unit quaternions in Hamilton convention ($\|q\| = 1.000000 \pm 10^{-6}$).
 
 ---
 
@@ -170,37 +166,34 @@ evo_ape tum groundtruth.txt estimated_trajectory.txt -a
 
 # 2. Relative Pose Error (RPE RMSE) over 1-second windows (200 frames)
 evo_rpe tum groundtruth.txt estimated_trajectory.txt -a -d 200 -u f
-
-# 3. Plot trajectory comparison
-evo_traj tum estimated_trajectory.txt --ref groundtruth.txt -p -a
 ```
 
 ---
 
 ## 📦 Official Submission Package
 
-The standalone submission package [`VITC_SingleThread.zip`](file:///home/jeeva/projects/samsung_hackathon/VITC_SingleThread.zip) is structured strictly to competition specifications:
+The standalone submission package [`VITC_SingleThread.zip`](VITC_SingleThread.zip) is packaged as follows:
 
 ```text
 VITC_SingleThread.zip
-├── estimated_trajectory.txt     # Final generated trajectory (28,827 poses, 8 columns)
+├── estimated_trajectory.txt     # Generated trajectory (28,827 poses, 8 columns)
 ├── metadata.json                # Runtime benchmarks and compute specifications
 ├── README.md                    # Root execution & reproducibility guide
 ├── main                         # Standalone executable binary entrypoint
 ├── main.py                      # Root Python entrypoint
 └── src/
     ├── main.py                  # Self-contained zero-dependency source code
-    └── README.md                # Source compilation & run instructions
+    └── README.md                # Source run instructions
 ```
 
 ---
 
 ## 🤖 AI Disclosure Statement
 
-In compliance with the hackathon rules and transparency guidelines:
+In compliance with hackathon rules and AI disclosure guidelines:
 - **Core Algorithm**: **0% Neural Networks**. The filter is 100% deterministic, classical physics-based inertial estimation (15-state Error-State Kalman Filter on Lie manifolds, Runge-Kutta strapdown mechanics, and analytical centripetal compensation).
-- **AI Tool Usage**: Generative AI tools (Google Antigravity / Gemini) were used strictly as programming assistants for code refactoring, test suite scaffolding, and documentation styling under human technical direction.
-- Full formal disclosure available in [`AI_DISCLOSURE.md`](file:///home/jeeva/projects/samsung_hackathon/AI_DISCLOSURE.md).
+- **AI Tool Usage**: Generative AI tools (Google Antigravity / Gemini) were utilized strictly as programming assistants for code refactoring, test suite scaffolding, and documentation layout under human technical direction.
+- Full formal disclosure available in [`AI_DISCLOSURE.md`](AI_DISCLOSURE.md).
 
 ---
 
