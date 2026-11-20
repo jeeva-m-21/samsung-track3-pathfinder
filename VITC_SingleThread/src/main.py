@@ -63,7 +63,7 @@ DEFAULT_PARAMS = {
     # Regime OU damping (decoupled flight vs walking)
     "tau_ou": 1.946,
     "tau_ou_flight": 1.753,
-    "tau_ou_walk": 2.347,
+    "tau_ou_walk": 0.95,
     "flight_vibe_thresh": 0.40,
     "ped_energy_thresh": 0.20,
     "enable_wiener_ou": True,
@@ -143,7 +143,7 @@ DEFAULT_PARAMS = {
     "regime_curvature_min_w": 0.50,
     "tau_omega_blind": 0.411,
     "blind_window_s": 0.585,
-    "blind_yaw_only_walk": True,
+    "blind_yaw_only_walk": False,
 }
 
 
@@ -1706,7 +1706,7 @@ class SparseESKF:
         q_clamped = max(0.0, min(1.0, quality))
         tau_eff = tau_base * (1.0 + 5.0 * (1.0 - q_clamped))
 
-        if pr.get("enable_centripetal_comp", False) and (not is_flight):
+        if pr.get("enable_centripetal_comp", False) and is_pedestrian:
             r00, r01, r02, r10, r11, r12, r20, r21, r22 = self._get_rot()
             vx, vy, vz = v[0], v[1], v[2]
             vbx = r00 * vx + r10 * vy + r20 * vz

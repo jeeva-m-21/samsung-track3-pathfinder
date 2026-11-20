@@ -2,13 +2,13 @@
   "team": "VITC_SingleThread",
   "track": "Track 3: Path Finder (IMU-Only Dead-Reckoning)",
   "implementation": "Python 3 Standard Library, single-threaded, zero external dependencies",
-  "peak_rss_mb": 21.42,
-  "peak_tracemalloc_heap_mb": 2.14,
-  "cpu_ms_per_second_of_imu": 10.5,
+  "peak_rss_mb": 23.95,
+  "peak_tracemalloc_heap_mb": 1.06,
+  "cpu_ms_per_second_of_imu": 13.52,
   "host": {
     "arch": "x86_64",
     "os": "Linux",
-    "runtime": "Python 3.10+ (Standard Library only: math, struct, array, zipfile, sys)"
+    "runtime": "Python 3.10+ (Standard Library only: math, struct, array, zipfile, sys, gc)"
   },
   "constraints_verification": {
     "peak_rss_budget_pass": true,
@@ -18,10 +18,10 @@
     "format_validation_pass": true
   },
   "performance_metrics": {
-    "held_out_loocv_ate_rmse_m": 2.4917,
-    "held_out_loocv_blind_5s_rmse_m": 4.2377,
-    "held_out_loocv_gap_2s_rmse_m": 4.7414,
-    "clean_baseline_ate_rmse_m": 2.4530,
-    "degradation_ate_penalty_cm": 3.8
+    "overall_50run_ate_rmse_m": 2.5252,
+    "overall_50run_blind_5s_rmse_m": 3.7014,
+    "overall_50run_gap_2s_rmse_m": 2.4213,
+    "overall_50run_rpe_rmse_mps": 0.7441,
+    "contract_pass_rate": 1.0
   }
 }
