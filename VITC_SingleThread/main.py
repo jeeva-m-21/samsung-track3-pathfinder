@@ -1040,7 +1040,7 @@ class SparseESKF:
         "_gait_step", "_gait_da_pp",
         "ring", "ring_cap", "monitor", "q_scale_g", "q_scale_a",
         "fp", "hp0", "hp1", "hp2", "k0", "k1", "k2", "w0", "w1", "w2", "dx",
-        "_rot_cached", "_rot_q", "drag_e1", "drag_e2", "_step_idx"
+        "_rot_cached", "_rot_q", "drag_e1", "drag_e2", "_step_idx", "is_drone_seq"
     )
 
     def __init__(self, params: dict, dt_nom: float = 0.005):
@@ -1053,6 +1053,7 @@ class SparseESKF:
         self.ba = [0.0, 0.0, 0.0]
         self.P = [[0.0] * 15 for _ in range(15)]
         self.g_mag = G_STD
+        self.is_drone_seq = False
         self.drag_e1 = (1.0, 0.0, 0.0)
         self.drag_e2 = (0.0, 1.0, 0.0)
         self._step_idx = 0
@@ -1234,6 +1235,23 @@ class SparseESKF:
             or (w_bar_mag > 0.20)
         )
 
+        # Sequence-level drone vs pedestrian regime classification via rotor vibration
+        da_samp = []
+        n_scan = min(cnt, 4000)
+        step_da = max(1, n_scan // 500)
+        for u in range(1, n_scan, step_da):
+            if not dup_mask[u] and not invalid_mask[u]:
+                axu, ayu, azu = (ax_a[u], ay_a[u], az_a[u]) if flat else (acc_arr[u][0], acc_arr[u][1], acc_arr[u][2])
+                axp, ayp, azp = (ax_a[u - 1], ay_a[u - 1], az_a[u - 1]) if flat else (acc_arr[u - 1][0], acc_arr[u - 1][1], acc_arr[u - 1][2])
+                da = sqrt((axu - axp) ** 2 + (ayu - ayp) ** 2 + (azu - azp) ** 2)
+                da_samp.append(da)
+        if da_samp:
+            da_samp.sort()
+            med_da = da_samp[len(da_samp) >> 1]
+            self.is_drone_seq = (med_da > 0.35)
+        else:
+            self.is_drone_seq = False
+
         best_mid_idx = 0
         if motion_detected and self.params.get("enable_static_window_mining", True):
             # Find quietest 0.4s sub-window within T_init for cleaner gravity direction and gyro bias
@@ -1277,54 +1295,6 @@ class SparseESKF:
                 if gv < 0.0004 and g_mean_mag < 0.12 and abs(a_sub_mag - G_STD) < 0.35:
                     self.bg = [gmx, gmy, gmz]
 
-            # Scan early clean trajectory (t <= 15 s) for a verified zero-motion pause to refine b_g0
-            t0_val = float(t_arr[0])
-            scan_limit = fail_start
-            t_scan_max = t0_val + 15.0
-            for idx_s in range(fail_start):
-                if float(t_arr[idx_s]) > t_scan_max:
-                    scan_limit = idx_s
-                    break
-
-            w_mine = max(20, int(round(0.25 / self.dt_nom)))
-            if scan_limit >= w_mine:
-                best_wv = 0.0004
-                best_bg = None
-                step_m = max(1, w_mine >> 1)
-                for sk in range(0, scan_limit - w_mine, step_m):
-                    ok = True
-                    for u in range(sk, sk + w_mine):
-                        if dup_mask[u] or invalid_mask[u]:
-                            ok = False
-                            break
-                        if noise_mult is not None and noise_mult[u] > 2.5:
-                            ok = False
-                            break
-                    if not ok:
-                        continue
-                    sx = sy = sz = sg2 = san = san2 = 0.0
-                    for u in range(sk, sk + w_mine):
-                        if flat:
-                            ux, uy, uz = gx_a[u], gy_a[u], gz_a[u]
-                            axu, ayu, azu = ax_a[u], ay_a[u], az_a[u]
-                        else:
-                            ux, uy, uz = float(gyr_arr[u][0]), float(gyr_arr[u][1]), float(gyr_arr[u][2])
-                            axu, ayu, azu = float(acc_arr[u][0]), float(acc_arr[u][1]), float(acc_arr[u][2])
-                        sx += ux; sy += uy; sz += uz
-                        sg2 += ux * ux + uy * uy + uz * uz
-                        an_u = sqrt(axu * axu + ayu * ayu + azu * azu)
-                        san += an_u; san2 += an_u * an_u
-                    inv_wm = 1.0 / w_mine
-                    gmx, gmy, gmz = sx * inv_wm, sy * inv_wm, sz * inv_wm
-                    gv = (sg2 * inv_wm - (gmx * gmx + gmy * gmy + gmz * gmz)) / 3.0
-                    am = san * inv_wm
-                    av = san2 * inv_wm - am * am
-                    g_mean_mag = sqrt(gmx * gmx + gmy * gmy + gmz * gmz)
-                    if gv < best_wv and av < 0.0225 and abs(am - G_STD) < 0.35 and g_mean_mag < 0.08:
-                        best_wv = gv
-                        best_bg = (gmx, gmy, gmz)
-                if best_bg is not None:
-                    self.bg = [best_bg[0], best_bg[1], best_bg[2]]
         elif motion_detected:
             a_ref = accs[0]
             self.bg = [0.0, 0.0, 0.0]
@@ -1334,6 +1304,60 @@ class SparseESKF:
             self.bg = [w_bar[0], w_bar[1], w_bar[2]]
             a_norm = sqrt(a_ref[0] ** 2 + a_ref[1] ** 2 + a_ref[2] ** 2)
             self.g_mag = max(self.params["g_mag_clamp_min"], min(self.params["g_mag_clamp_max"], a_norm))
+
+        # Scan early clean trajectory (t <= 6.5 s) for a verified zero-motion pause to refine b_g0 and a_ref
+        t0_val = float(t_arr[0])
+        scan_limit = fail_start
+        t_scan_max = t0_val + 6.5
+        for idx_s in range(fail_start):
+            if float(t_arr[idx_s]) > t_scan_max:
+                scan_limit = idx_s
+                break
+
+        w_mine = max(20, int(round(0.40 / self.dt_nom)))
+        if scan_limit >= w_mine:
+            best_wv = 0.0005
+            best_bg = None
+            best_a_mine = None
+            step_m = max(1, w_mine >> 2)
+            for sk in range(0, scan_limit - w_mine, step_m):
+                ok = True
+                for u in range(sk, sk + w_mine):
+                    if dup_mask[u] or invalid_mask[u]:
+                        ok = False
+                        break
+                    if noise_mult is not None and noise_mult[u] > 2.5:
+                        ok = False
+                        break
+                if not ok:
+                    continue
+                sx = sy = sz = sg2 = san = san2 = sax = say = saz = 0.0
+                for u in range(sk, sk + w_mine):
+                    if flat:
+                        ux, uy, uz = gx_a[u], gy_a[u], gz_a[u]
+                        axu, ayu, azu = ax_a[u], ay_a[u], az_a[u]
+                    else:
+                        ux, uy, uz = float(gyr_arr[u][0]), float(gyr_arr[u][1]), float(gyr_arr[u][2])
+                        axu, ayu, azu = float(acc_arr[u][0]), float(acc_arr[u][1]), float(acc_arr[u][2])
+                    sx += ux; sy += uy; sz += uz
+                    sg2 += ux * ux + uy * uy + uz * uz
+                    an_u = sqrt(axu * axu + ayu * ayu + azu * azu)
+                    san += an_u; san2 += an_u * an_u
+                    sax += axu; say += ayu; saz += azu
+                inv_wm = 1.0 / w_mine
+                gmx, gmy, gmz = sx * inv_wm, sy * inv_wm, sz * inv_wm
+                gv = (sg2 * inv_wm - (gmx * gmx + gmy * gmy + gmz * gmz)) / 3.0
+                am = san * inv_wm
+                av = san2 * inv_wm - am * am
+                g_mean_mag = sqrt(gmx * gmx + gmy * gmy + gmz * gmz)
+                if gv < best_wv and av < 0.010 and abs(am - G_STD) < 0.25 and g_mean_mag < 0.10:
+                    best_wv = gv
+                    best_bg = (gmx, gmy, gmz)
+                    best_a_mine = (sax * inv_wm, say * inv_wm, saz * inv_wm)
+            if best_bg is not None:
+                self.bg = [best_bg[0], best_bg[1], best_bg[2]]
+                if best_a_mine is not None and (motion_detected or abs(a_norm - G_STD) > 0.15):
+                    a_ref = best_a_mine
 
         a_ref_n = sqrt(a_ref[0] ** 2 + a_ref[1] ** 2 + a_ref[2] ** 2)
         if a_ref_n < 1e-6:
@@ -1507,8 +1531,12 @@ class SparseESKF:
         self._gait_step += 1
         self.gyro_ema = (1.0 - self.alpha_vibe) * self.gyro_ema + self.alpha_vibe * w_mag
 
-        is_flight = self.vibe_clean > pr["flight_vibe_thresh"]
-        is_pedestrian = (not is_flight) and (self.ped_energy > pr["ped_energy_thresh"])
+        if self.is_drone_seq:
+            is_flight = (self.vibe_clean > (pr["flight_vibe_thresh"] * 0.5)) or (w_mag > 0.15)
+            is_pedestrian = False
+        else:
+            is_flight = False
+            is_pedestrian = self.ped_energy > pr["ped_energy_thresh"]
 
         # Regime-decoupled OU damping
         if is_flight:
@@ -1618,7 +1646,7 @@ class SparseESKF:
 
         is_zupt = False
         n_win = len(self.win_w)
-        if w_mag < 0.12 and n_win >= self.zupt_min_len and quality >= pr["zupt_min_quality"]:
+        if n_win >= self.zupt_min_len:
             inv_k = 1.0 / n_win
             w_mean_n = self._sum_w * inv_k
             a_mean_n = self._sum_an * inv_k
@@ -1638,7 +1666,17 @@ class SparseESKF:
                 pr.get("enable_zaru", True) and g_var < pr["zupt_gyro_var"] and w_mean_n < 0.08
             )
             acc_dev = pr["zupt_acc_dev"]
-            if rest_gyro_ok and abs(a_mean_n - self.g_mag) < acc_dev and a_var_n < (acc_dev * acc_dev):
+            # E83 Variance-Rest Stillness Detector
+            raw_w_mag = sqrt(g_mx * g_mx + g_my * g_my + g_mz * g_mz)
+            e83_still = (
+                pr.get("enable_zaru", True)
+                and g_var < 0.0005
+                and a_var_n < 0.010
+                and abs(a_mean_n - self.g_mag) < 0.25
+                and raw_w_mag < 0.10
+                and w_mag < 0.15
+            )
+            if e83_still or (quality >= pr["zupt_min_quality"] and rest_gyro_ok and abs(a_mean_n - self.g_mag) < acc_dev and a_var_n < (acc_dev * acc_dev)):
                 is_zupt = True
 
         # 4. Regime Updates (ZUPT+ZARU / Flight / Posture-Invariant Walking NHC)
@@ -1657,7 +1695,7 @@ class SparseESKF:
                 self._update_block3(
                     9, gx - bg[0], gy - bg[1], gz - bg[2],
                     1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0,
-                    rz_bg, rz_bg, rz_bg, gate_threshold=16.0, clear_pv=False,
+                    rz_bg, rz_bg, rz_bg, gate_threshold=1e9, clear_pv=False,
                     m_dim=3, nu=pr["nu_vel"]
                 )
         elif is_flight:
