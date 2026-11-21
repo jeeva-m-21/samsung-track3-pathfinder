@@ -1,0 +1,11 @@
+{
+  "euroc": [
+    "MH_01_easy",
+    "V1_01_easy",
+    "V2_02_medium"
+  ],
+  "tumvi": [
+    "room1_512_16",
+    "room2_512_16"
+  ]
+}

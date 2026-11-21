@@ -2,9 +2,9 @@
   "team": "VITC_SingleThread",
   "track": "Track 3: Path Finder (IMU-Only Dead-Reckoning)",
   "implementation": "Python 3 Standard Library, single-threaded, zero external dependencies",
-  "peak_rss_mb": 23.95,
-  "peak_tracemalloc_heap_mb": 1.06,
-  "cpu_ms_per_second_of_imu": 13.52,
+  "peak_rss_mb": 23.57,
+  "peak_tracemalloc_heap_mb": 2.46,
+  "cpu_ms_per_second_of_imu": 12.06,
   "host": {
     "arch": "x86_64",
     "os": "Linux",
@@ -18,10 +18,10 @@
     "format_validation_pass": true
   },
   "performance_metrics": {
-    "overall_50run_ate_rmse_m": 2.5252,
-    "overall_50run_blind_5s_rmse_m": 3.7014,
-    "overall_50run_gap_2s_rmse_m": 2.4213,
-    "overall_50run_rpe_rmse_mps": 0.7441,
+    "overall_50run_ate_rmse_m": 2.439,
+    "overall_50run_blind_5s_rmse_m": 3.503,
+    "overall_50run_gap_2s_rmse_m": 2.277,
+    "overall_50run_rpe_rmse_mps": 0.740,
     "contract_pass_rate": 1.0
   }
 }
