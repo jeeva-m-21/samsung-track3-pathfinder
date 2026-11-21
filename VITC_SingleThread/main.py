@@ -45,8 +45,8 @@ DEFAULT_PARAMS = {
     # Process noise (aligned with degrade_imu.py noise & bias RW)
     "sigma_g_base": 0.015,
     "sigma_a_base": 0.080,
-    "sigma_bg_base": 0.0004,
-    "sigma_ba_base": 0.0031,
+    "sigma_bg_base": 0.0001,
+    "sigma_ba_base": 0.0010,
     "enable_sev_bias_rw": True,
     "enable_inekf_transition": True,
 
@@ -116,7 +116,7 @@ DEFAULT_PARAMS = {
     "zupt_sigma": 0.0143,
     "sigma_zupt": 0.0143,
     "enable_zaru": True,
-    "zaru_sigma": 0.015,
+    "zaru_sigma": 0.005,
     "zupt_min_quality": 0.30,
 
     # Student-t Variational Scaling
