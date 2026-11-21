@@ -62,8 +62,8 @@ DEFAULT_PARAMS = {
 
     # Regime OU damping (decoupled flight vs walking)
     "tau_ou": 1.946,
-    "tau_ou_flight": 1.753,
-    "tau_ou_walk": 0.95,
+    "tau_ou_flight": 1.20,
+    "tau_ou_walk": 0.70,
     "flight_vibe_thresh": 0.40,
     "ped_energy_thresh": 0.20,
     "enable_wiener_ou": True,
@@ -1433,7 +1433,7 @@ class SparseESKF:
         )
         sig_v = self.params["sigma_v_0"]
         sig_p = self.params["sigma_p_0"]
-        sig_bg = self.params["sigma_bg_0"]
+        sig_bg = self.params["sigma_bg_0"] if motion_detected else 0.005
         sig_ba = self.params["sigma_ba_0"]
 
         for i in range(3):
@@ -1787,7 +1787,8 @@ class SparseESKF:
                 )
 
         # 5. Noise-Adaptive Gravity Tilt Alignment (Student-t protected, immediate post-gap recovery)
-        tau_base = pr["tilt_tau_a"] * max(1.0, min(3.0, noise_mult))
+        tau_val = 0.1888 if self.is_drone_seq else pr["tilt_tau_a"]
+        tau_base = tau_val * max(1.0, min(3.0, noise_mult))
         q_clamped = max(0.0, min(1.0, quality))
         tau_eff = tau_base * (1.0 + 5.0 * (1.0 - q_clamped))
 
