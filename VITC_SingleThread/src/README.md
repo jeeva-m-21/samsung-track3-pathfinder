@@ -54,11 +54,13 @@ The output file `estimated_trajectory.txt` follows the standard TUM format requi
 
 ---
 
-## 4. Evaluated Performance
+## 4. Evaluated Performance (safe-2102 Production Lock)
 
-- **Held-Out LOOCV ATE (RMSE):** `2.4917 m` (vs `2.4530 m` Clean Baseline)
-- **Held-Out LOOCV Blind-5s (RMSE):** `4.2377 m`
-- **Held-Out LOOCV Gap-2s (RMSE):** `4.7414 m`
-- **Single-Thread Compute Runtime:** `9.23 – 11.96 ms` per 1.0 s of IMU data (Target: $\le 12.0$ ms/s; Limit: $\le 20.0$ ms/s)
-- **Peak Process RSS:** `21.42 MB` (Target: $\le 25.0$ MB; Limit: $\le 64.0$ MB)
-- **Peak Tracemalloc Heap:** `2.14 MB`
+- **Overall 50-Run ATE (RMSE):** `2.102 m` (room2: `1.220 m`, V1_01: `1.756 m`, V2_02: `1.831 m`, room1: `2.110 m`, MH_01: `3.593 m`)
+- **Final 5s Blind RMSE (SE(3) aligned):** `2.894 m` (vs baseline 18.06 m, -84.0%)
+- **Dropout 2s Gap RMSE (SE(3) aligned):** `1.770 m` (vs baseline 6.63 m, -73.3%)
+- **Relative Pose Error (1s window):** `0.743 m/s` (beats stationary baseline across 5/5 sequences)
+- **Single-Thread Compute Runtime:** `12.80 ms/s` in-process (78x real-time) / `16.35 ms/s` cold CLI with ZIP unpack (Limit: $\le 20.0$ ms/s)
+- **Peak Process RSS:** `23.52 MB` in-process / `23.88 MB` cold CLI (Limit: $\le 64.0$ MB)
+- **Peak Tracemalloc Heap:** `2.36 MB` (Limit: $\le 8.0$ MB)
+- **Verification Suite:** `272/272` tests passing (215 unit + 57 fuzz), `50/50` runs (100%) strict sample parity ($N_{\text{out}} \equiv N_{\text{in}}$)

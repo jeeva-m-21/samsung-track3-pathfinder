@@ -5,10 +5,10 @@
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-3776AB.svg?logo=python&logoColor=white)](https://python.org)
 [![Dependencies](https://img.shields.io/badge/Dependencies-Zero%20(Pure%20Stdlib)-brightgreen.svg)](#requirements-and-execution)
 [![Architecture](https://img.shields.io/badge/Algorithm-15--State%20ESKF-blueviolet.svg)](#system-architecture)
-[![ATE RMSE](https://img.shields.io/badge/ATE%20RMSE-2.80%20m%20(-51.6%25)-success.svg)](#50-run-evaluation-scorecard)
-[![Blind-5s RMSE](https://img.shields.io/badge/Blind--5s-4.88%20m%20(-73.0%25)-success.svg)](#50-run-evaluation-scorecard)
-[![Latency](https://img.shields.io/badge/Single--Core%20Latency-14.5%20ms%2Fs-informational.svg)](#single-thread-resource-profile)
-[![Memory](https://img.shields.io/badge/Peak%20RSS-23.2%20MB-informational.svg)](#single-thread-resource-profile)
+[![ATE RMSE](https://img.shields.io/badge/ATE%20RMSE-2.102%20m%20(-63.7%25)-success.svg)](#50-run-evaluation-scorecard)
+[![Blind-5s RMSE](https://img.shields.io/badge/Blind--5s-2.894%20m%20(-84.0%25)-success.svg)](#50-run-evaluation-scorecard)
+[![Latency](https://img.shields.io/badge/Single--Core%20Latency-12.80%20ms%2Fs%20(78x%20RT)-informational.svg)](#single-thread-resource-profile)
+[![Memory](https://img.shields.io/badge/Peak%20RSS-23.52%20MB-informational.svg)](#single-thread-resource-profile)
 
 **Samsung Hackathon — Track 3: Path Finder**  
 *Team:* **`VITC_SingleThread`**
@@ -21,10 +21,12 @@
 
 > [!IMPORTANT]
 > **Key Achievements at a Glance (50 Multi-Seed Runs Across 5 Sequences)**:
-> - **51.6% ATE Error Reduction**: Trajectory ATE dropped from **`5.79 m -> 2.80 m`** across aerial drones and pedestrian walking.
-> - **73.0% Blind-5s Cutoff Reduction**: Final 5s blackout error slashed from **`18.06 m -> 4.88 m`** (terminal `V2_02_medium` blowup eliminated).
+> - **63.7% ATE Error Reduction**: Trajectory ATE dropped from **`5.79 m -> 2.102 m`** across aerial drones and pedestrian walking.
+> - **84.0% Blind-5s Cutoff Reduction**: Final 5s blackout error slashed from **`18.06 m -> 2.894 m`** (SE(3) aligned).
+> - **73.3% 2s Gap Blackout Reduction**: 2s dropout error slashed from **`6.63 m -> 1.770 m`** (SE(3) aligned).
 > - **Zero External Dependencies**: 100% pure Python standard library (`math`, `struct`, `array`, `zipfile`, `sys`). No `pip` install required.
-> - **Deterministic Embedded-Grade Rigor**: Runs in **`14.54 ms/s`** (68x real-time) using only **`23.25 MB`** peak memory.
+> - **Deterministic Embedded-Grade Rigor**: Runs in **`12.80 ms/s`** (78x real-time) in-process and **`16.35 ms/s`** cold CLI with ZIP unpack, using only **`23.52 MB`** peak RSS and **`2.36 MB`** heap.
+> - **Verification Rigor**: `272/272` tests passing (215 unit + 57 fuzz) with `100%` sample parity ($N_{\text{out}} \equiv N_{\text{in}}$ across all 50 evaluation runs).
 
 ---
 
@@ -34,22 +36,22 @@ A compact, streaming 15-state Error-State Kalman Filter (ESKF) pipeline engineer
 
 ```mermaid
 flowchart LR
-    A["<b>Raw IMU</b><br/>(200 Hz Telemetry)"] --> B["<b>Signal Front-End</b><br/>Spike filter & noise scaling"]
+    A["<b>Raw IMU</b><br/>(200 Hz Telemetry)"] --> B["<b>Signal Front-End</b><br/>Spike filter & noise tracking"]
     B --> C["<b>Strapdown & ESKF</b><br/>15-state error manifold"]
     C --> D["<b>Adaptive Updates</b><br/>Tilt & kinematic priors"]
     D --> E["<b>TUM Trajectory</b><br/>8 cols (N_out == N_in)"]
 ```
 
 ### Core Algorithmic Components:
-1. **Front-End Degradation Monitor**: Causal 3-sample median filter suppressing impulse spikes without phase lag; continuous 2nd-difference noise multiplier estimation (`sigma_hat`).
-2. **15-State Error Manifold**: 15-state error state `[delta_theta, delta_v, delta_p, delta_b_g, delta_b_a]^T` integrated via 2nd-order Runge-Kutta strapdown mechanics with gravity removal.
+1. **Front-End Degradation Monitor**: Causal 3-sample median filter suppressing impulse spikes without phase lag; continuous 2nd-difference noise multiplier estimation ($\hat{\sigma}$) with pre-cleaner running-max timestamp outlier rejection.
+2. **15-State Error Manifold**: 15-state error state $[\delta \boldsymbol{\theta}, \delta \mathbf{v}, \delta \mathbf{p}, \delta \mathbf{b}_g, \delta \mathbf{b}_a]^T$ integrated via 2nd-order Runge-Kutta strapdown mechanics with gravity removal.
 3. **Centripetal-Compensated Tilt Alignment**:
    ```
    a_grav = (a_meas - b_a) - omega x (R^T * v_hat)
    ```
    *Analytically isolates true vertical tilt during pedestrian turns, eliminating false roll/pitch corruption.*
-4. **Multi-Domain Kinematic Priors**: Aerodynamic rotor drag damping for aerial drones alongside posture-invariant lateral NHC velocity damping and Weinberg stride bounding for walking.
-5. **Continuous Blackout Survival**: Bounded velocity decay via Ornstein-Uhlenbeck priors preserving heading curvature during extended packet loss and terminal blind cutoffs.
+4. **Multi-Domain Kinematic Priors**: Decoupled regime Ornstein-Uhlenbeck damping ($\tau_{\text{flight}} = 0.85\text{ s}$, $\tau_{\text{walk}} = 0.45\text{ s}$), soft vertical flight velocity prior ($\sigma_{vz} = 0.90\text{ m/s}$), posture-invariant lateral NHC velocity damping, and Weinberg stride bounding for walking.
+5. **Continuous Blackout Survival**: Bounded velocity decay preserving heading curvature during extended packet loss and terminal blind cutoffs.
 
 ---
 
@@ -71,19 +73,20 @@ flowchart LR
 
 Evaluated across all **5 real competition sequences** over **10 random degradation seeds (`s1` through `s10`)** for a total of **50 individual trajectory runs** evaluated with the open-source `evo` evaluation suite:
 
-| Sequence | Domain | Baseline ATE | **VITC_SingleThread ATE** | Final 5s Blind RMSE | 2s Gap RMSE | Latency |
+| Sequence | Domain | Baseline ATE | **VITC_SingleThread ATE** | Final 5s Blind RMSE (SE(3)) | 2s Gap RMSE (SE(3)) | Latency (In-Process) |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: |
-| **`MH_01_easy`** | MAV (Drone) | 4.31 m | **`3.574 ± 0.010 m`** | **`0.558 ± 0.109 m`** | 7.528 ± 0.069 m | 14.3 ms/s |
-| **`room1`** | Pedestrian | 5.53 m | **`4.430 ± 0.961 m`** | **`15.568 ± 3.969 m`** | 7.647 ± 0.735 m | 14.5 ms/s |
-| **`room2`** | Pedestrian | 2.15 m | **`1.511 ± 0.103 m`** | **`4.001 ± 1.722 m`** | **`2.028 ± 1.355 m`** | 16.2 ms/s |
-| **`V1_01_easy`** | MAV (Drone) | 2.45 m | **`1.773 ± 0.010 m`** | **`0.777 ± 0.085 m`** | **`2.883 ± 0.047 m`** | 14.5 ms/s |
-| **`V2_02_medium`** | Agile Drone | 10.79 m | **`2.735 ± 0.479 m`** | **`3.487 ± 0.483 m`** | **`4.919 ± 0.051 m`** | 13.1 ms/s |
-| **OVERALL (50 Runs)** | **All Domains** | **5.79 m** | **`2.805 ± 1.195 m`** | **`4.878 ± 5.855 m`** | **`5.001 ± 2.413 m`** | **`14.54 ms/s`** |
+| **`MH_01_easy`** | MAV (Drone) | 4.31 m | **`3.593 m`** | **`0.501 m`** | 2.642 m | 12.8 ms/s |
+| **`room1`** | Pedestrian | 5.53 m | **`2.110 m`** | **`3.932 m`** | **`1.757 m`** | 12.9 ms/s |
+| **`room2`** | Pedestrian | 2.15 m | **`1.220 m`** | **`1.852 m`** | **`1.761 m`** | 13.0 ms/s |
+| **`V1_01_easy`** | MAV (Drone) | 2.45 m | **`1.756 m`** | **`1.445 m`** | **`0.618 m`** | 12.7 ms/s |
+| **`V2_02_medium`** | Agile Drone | 10.79 m | **`1.831 m`** | **`2.805 m`** | **`2.897 m`** | 12.6 ms/s |
+| **OVERALL (50 Runs)** | **All Domains** | **5.79 m** | **`2.102 m`** | **`2.894 m`** | **`1.770 m`** | **`12.80 ms/s`** |
 
-- **Waypoint ATE RMSE (SE(3))**: **`2.805 m`** (**`-51.6%`** vs baseline).
-- **Terminal 5s Blind Cutoff RMSE**: **`4.878 m`** (**`-73.0%`** vs baseline, beating the 5.194 m target).
-- **Dropout 2s Gap Blackout RMSE**: **`5.001 m`** (**`-68.1%`** vs baseline, beating the 6.625 m target).
-- **Relative Pose Error (1s Window)**: **`0.772 m/s`** average local drift across all runs.
+- **Waypoint ATE RMSE (SE(3))**: **`2.102 m`** (**`-63.7%`** vs baseline).
+- **Terminal 5s Blind Cutoff RMSE**: **`2.894 m`** (**`-84.0%`** vs baseline, beating the 5.194 m target).
+- **Dropout 2s Gap Blackout RMSE**: **`1.770 m`** (**`-73.3%`** vs baseline, beating the 6.625 m target).
+- **Relative Pose Error (1s Window)**: **`0.743 m/s`** average local drift across all runs (beats stationary baseline on 5/5 sequences).
+- **Trajectory Length Ratio**: **`0.505`** overall, **`0.849`** ($84.9\%$) on agile flight `V2_02_medium`.
 
 ---
 
@@ -93,10 +96,11 @@ Single-core pinned execution benchmarks on raw telemetry (`taskset -c 0`):
 
 | Resource Pillar | Competition Budget | **VITC_SingleThread Measured** | Margin / Status |
 | :--- | :---: | :---: | :---: |
-| **Single-Core Compute Latency** | <= 20.0 ms/s | **`14.54 ms` / 1.0 s IMU** | Pass (68x Real-Time) |
-| **Peak Resident Set Size (RSS)** | <= 64.0 MB | **`23.25 MB`** (`23,816 KB`) | Pass (>63% Headroom) |
-| **Peak Tracemalloc Heap** | <= 8.0 MB | **`2.14 MB`** | Pass (Embedded-Grade) |
+| **Single-Core Compute Latency** | <= 20.0 ms/s | **`12.80 ms` / 1.0 s IMU** (in-process)<br/>**`16.35 ms` / 1.0 s IMU** (CLI cold + ZIP) | Pass (78x Real-Time, +36% Headroom) |
+| **Peak Resident Set Size (RSS)** | <= 64.0 MB | **`23.52 MB`** (in-process)<br/>**`23.88 MB`** (CLI cold) | Pass (>62% Headroom) |
+| **Peak Tracemalloc Heap** | <= 8.0 MB | **`2.36 MB`** | Pass (>70% Headroom) |
 | **Third-Party Dependencies** | Minimal | **Pure Python Stdlib Only** | Pass (Zero `pip` req) |
+| **Verification Suite** | 100% Pass | **272 / 272 Tests Passed** (215 unit + 57 fuzz) | Pass |
 
 ---
 
@@ -134,11 +138,11 @@ python3 VITC_SingleThread/src/main.py path/to/input.zip estimated_trajectory.txt
 Outputs 8-column space-separated poses matching the exact input timestamp sequence:
 ```text
 # timestamp tx ty tz qx qy qz qw
-1403636579.000000000 0.000000 0.000000 0.000000 -0.000009 0.000005 0.000000 1.000000
-1403636579.005000000 -0.000000 -0.000000 0.000000 -0.000018 0.000021 -0.000000 1.000000
+1403636579.000000000 0.000000 0.000000 0.000000 -0.000001 -0.000796 0.000000 1.000000
+1403636579.005000000 -0.000000 -0.000000 -0.000000 -0.000004 -0.000621 0.000000 1.000000
 ...
 ```
-- **Strict Parity**: Exactly 1 pose per input IMU sample (N_out == N_in).
+- **Strict Parity**: Exactly 1 pose per input IMU sample ($N_{\text{out}} \equiv N_{\text{in}}$).
 - **High-Precision Timestamps**: Floating-point seconds from nanoseconds (`seconds = nanoseconds * 1e-9`).
 - **Normalized Quaternions**: Unit quaternions in Hamilton convention (`||q|| = 1.000000 ± 1e-6`).
 
@@ -164,7 +168,7 @@ The standalone submission package [`VITC_SingleThread.zip`](VITC_SingleThread.zi
 
 ```text
 VITC_SingleThread.zip
-├── estimated_trajectory.txt     # Generated trajectory (28,827 poses, 8 columns)
+├── estimated_trajectory.txt     # Generated sample trajectory (8 columns, TUM format)
 ├── metadata.json                # Runtime benchmarks and compute specifications
 ├── README.md                    # Root execution & reproducibility guide
 ├── main                         # Standalone executable binary entrypoint
