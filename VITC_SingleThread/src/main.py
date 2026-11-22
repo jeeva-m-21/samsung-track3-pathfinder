@@ -62,8 +62,8 @@ DEFAULT_PARAMS = {
 
     # Regime OU damping (decoupled flight vs walking)
     "tau_ou": 1.946,
-    "tau_ou_flight": 1.20,
-    "tau_ou_walk": 0.70,
+    "tau_ou_flight": 0.85,
+    "tau_ou_walk": 0.45,
     "flight_vibe_thresh": 0.40,
     "ped_energy_thresh": 0.20,
     "enable_wiener_ou": True,
@@ -78,7 +78,7 @@ DEFAULT_PARAMS = {
     # Flight vertical velocity prior
     "enable_flight_vz_prior": True,
     "enable_centripetal_comp": True,
-    "flight_vz_sigma": 1.20,
+    "flight_vz_sigma": 0.90,
 
     # Handheld / Pedestrian NHC + Posture-Invariant Frame + Weinberg Stride Speed
     "enable_pedestrian_prior": True,
