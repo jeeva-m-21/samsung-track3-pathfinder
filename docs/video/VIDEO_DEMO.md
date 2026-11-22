@@ -40,12 +40,12 @@
   # 3. Verify evo evaluation
   evo_ape tum groundtruth.txt estimated_trajectory.txt -a
   ```
-- **Showcase:** Execution finishes in $< 1.7\text{ seconds}$ with only $23.2\text{ MB}$ peak RSS.
+- **Showcase:** Execution finishes in $< 1.6\text{ seconds}$ with only $23.5\text{ MB}$ peak RSS ($2.36\text{ MB}$ heap).
 
 ### [2:05 - 2:45] 50-Run Benchmark Results & Conclusion
 - **Visual:** Display summary table of 50 multi-seed runs:
-  - Overall ATE: **`2.80 m`** (-51.6% reduction vs baseline)
-  - Blind-5s Cutoff: **`4.88 m`** (-73.0% reduction)
-  - 2s Gap Blackout: **`5.00 m`** (-68.1% reduction)
-  - Single-Core Latency: **`14.5 ms/s`** (well below $20\text{ ms/s}$ limit).
+  - Overall ATE: **`2.102 m`** (-63.7% reduction vs baseline)
+  - Blind-5s Cutoff: **`2.894 m`** (-84.0% reduction)
+  - 2s Gap Blackout: **`1.770 m`** (-73.3% reduction)
+  - Single-Core Latency: **`12.80 ms/s`** (78x real-time, well below $20\text{ ms/s}$ limit).
 - **Speaker:** "With zero heap churn, zero third-party dependencies, and verified multi-seed generalization, VITC_SingleThread delivers robust, production-grade inertial dead-reckoning."

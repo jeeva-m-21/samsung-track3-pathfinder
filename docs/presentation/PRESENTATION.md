@@ -11,7 +11,7 @@
 - **Title:** Path Finder: Robust IMU-Only Dead-Reckoning Under Heavy Degradation
 - **Team Name:** `VITC_SingleThread`
 - **Core Problem:** Estimate full 3D trajectory ($x, y, z, q$) using **pure 6-axis IMU only** (zero GPS, zero cameras, zero LiDAR, zero neural networks) under severe sensor degradation (spikes, bias walk, noise escalation, dropouts, and blackout cutoffs).
-- **Key Breakthrough:** Achieving **`2.80 m` ATE** and **`4.88 m` Blind-5s error** across 50 multi-seed benchmarks in pure Python standard library at **14.5 ms/s** single-thread latency.
+- **Key Breakthrough:** Achieving **`2.102 m` ATE** and **`2.894 m` Blind-5s error** across 50 multi-seed benchmarks in pure Python standard library at **12.80 ms/s** single-thread latency (78x real-time).
 
 ---
 
@@ -49,24 +49,22 @@
 
 ## Slide 5: Comprehensive Benchmark Results (50 Runs)
 
-| Sequence | Metric | Baseline | VITC_SingleThread | Improvement |
-| :--- | :--- | :---: | :---: | :---: |
-| **`MH_01_easy`** (Drone) | ATE RMSE | 4.31 m | **3.57 m** | **-17.2%** |
-| **`V1_01_easy`** (Drone) | ATE RMSE | 2.45 m | **1.77 m** | **-27.8%** |
-| **`V2_02_medium`** (Agile) | Blind-5s RMSE | 31.50 m | **3.49 m** | **-88.9%** |
-| **`room1`** (Pedestrian) | ATE RMSE | 5.53 m | **4.43 m** | **-19.9%** |
-| **`room2`** (Pedestrian) | Blind-5s RMSE | 5.98 m | **4.00 m** | **-33.1%** |
-| **OVERALL (50 Runs)** | **ATE RMSE** | **5.79 m** | **`2.80 m`** | **-51.6%** |
-| **OVERALL (50 Runs)** | **Final 5s Blind** | **18.06 m** | **`4.88 m`** | **-73.0%** |
-| **OVERALL (50 Runs)** | **2s Gap Blackout** | **15.65 m** | **`5.00 m`** | **-68.1%** |
+| Sequence | Domain | Baseline ATE | VITC_SingleThread ATE | Blind-5s RMSE | Gap-2s RMSE | Latency |
+| :--- | :--- | :---: | :---: | :---: | :---: | :---: |
+| **`MH_01_easy`** | Drone | 4.31 m | **`3.593 m`** | **`0.501 m`** | 2.642 m | 12.8 ms/s |
+| **`room1`** | Pedestrian | 5.53 m | **`2.110 m`** | **`3.932 m`** | **`1.757 m`** | 12.9 ms/s |
+| **`room2`** | Pedestrian | 2.15 m | **`1.220 m`** | **`1.852 m`** | **`1.761 m`** | 13.0 ms/s |
+| **`V1_01_easy`** | Drone | 2.45 m | **`1.756 m`** | **`1.445 m`** | **`0.618 m`** | 12.7 ms/s |
+| **`V2_02_medium`** | Agile Drone | 10.79 m | **`1.831 m`** | **`2.805 m`** | **`2.897 m`** | 12.6 ms/s |
+| **OVERALL (50 Runs)** | **All Domains** | **5.79 m** | **`2.102 m` (-63.7%)** | **`2.894 m` (-84.0%)** | **`1.770 m` (-73.3%)** | **`12.80 ms/s`** |
 
 ---
 
 ## Slide 6: Resource Footprint & Engineering Rigor
-- **Single-Core Latency:** **`14.54 ms` per 1.0 s of IMU** ($\le 20.0\text{ ms/s}$ competition limit, $>68\times$ real-time).
-- **Peak Process Memory:** **`23.25 MB`** RSS ($\le 64.0\text{ MB}$ competition ceiling, $>63\%$ headroom).
+- **Single-Core Latency:** **`12.80 ms` per 1.0 s of IMU** in-process ($78\times$ real-time) / **`16.35 ms/s`** cold CLI with ZIP unpack ($\le 20.0\text{ ms/s}$ limit, $36\%$ headroom).
+- **Peak Process Memory:** **`23.52 MB`** RSS in-process / **`23.88 MB`** CLI ($\le 64.0\text{ MB}$ limit, $63\%$ headroom), **`2.36 MB`** heap.
 - **Zero Third-Party Dependencies:** 100% Pure Python standard library (`math`, `struct`, `array`, `zipfile`, `sys`). Runs without `pip`, internet access, or external packages.
-- **Clean-Room Test Verification:** 219/219 unit tests passing, 57/57 fuzz tests passing. Bit-for-bit verified package layout.
+- **Clean-Room Test Verification:** 272/272 tests passing (215 unit + 57 fuzz), 100% sample parity ($N_{\text{out}} \equiv N_{\text{in}}$ across all 50 runs).
 
 ---
 

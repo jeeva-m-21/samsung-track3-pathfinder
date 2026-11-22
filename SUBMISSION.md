@@ -73,19 +73,22 @@ VITC_SingleThread implements an ultra-lightweight, embedded-grade **15-State Err
 Evaluated against the official competition degradation model across 150 independent trials:
 
 ### Resource Compliance (All Hard Limits Safely Met)
-- **Peak Tracemalloc Heap**: **`1.99 – 2.64 MB`** (Limit: $\le 8.0\text{ MB}$; Target: $\le 2.0\text{ MB}$) $\rightarrow$ **75% Headroom**
-- **Single-Thread Runtime (`taskset -c 0`)**: **`9.23 – 11.96 ms/s`** across all 5 sequences (Limit: $\le 20.0\text{ ms/s}$) $\rightarrow$ **40% Headroom**
-- **Clean-Room Peak RSS**: **`21.42 MB`** ($21,424\text{ KB}$) (Limit: $\le 65,536\text{ KB}$) $\rightarrow$ **67% Headroom**
+- **Peak Tracemalloc Heap**: **`2.36 MB`** (Limit: $\le 8.0\text{ MB}$) $\rightarrow$ **70% Headroom**
+- **Single-Thread Runtime (`taskset -c 0`)**: **`12.80 ms/s`** (in-process, 78x real-time) / **`16.35 ms/s`** (cold CLI + ZIP unpack) across all 5 sequences (Limit: $\le 20.0\text{ ms/s}$) $\rightarrow$ **36% Headroom**
+- **Clean-Room Peak RSS**: **`23.52 MB`** (in-process) / **`23.88 MB`** (cold CLI) (Limit: $\le 64.0\text{ MB}$) $\rightarrow$ **62% Headroom**
 - **Heap Allocation in Filter Loop**: **0 dynamic allocations** (fixed-size reusable working arrays).
 
-### Accuracy Metrics Across Degradation Trials
-- **Held-Out LOOCV ATE RMSE**: **`2.4917 m`** (vs $2.4530\text{ m}$ Clean Baseline — less than $4\text{ cm}$ degradation penalty!)
-- **Terminal 5s Blind Cutoff RMSE**: **`4.2377 m`** (Target: $5.194\text{ m}$) $\rightarrow$ **18% better than target**
-- **2s Blackout Gap RMSE**: **`4.7414 m`** (Target: $6.625\text{ m}$) $\rightarrow$ **28% better than target**
-- **150-Run Multi-Seed Confirmation**:
-  - Dev Seeds `{1..10}` (50 runs): Mean ATE = $2.87\text{ m}$, Median ATE = $2.36\text{ m}$, Blind-5s = $5.15\text{ m}$
-  - Reviewer Confirmation `{201..210}` (50 runs): Mean ATE = $2.68\text{ m}$, Median ATE = $2.26\text{ m}$, Blind-5s = $4.89\text{ m}$
-  - Fresh Untouched `{301..310}` (50 runs): Mean ATE = $2.69\text{ m}$, Median ATE = $2.24\text{ m}$, Blind-5s = $4.96\text{ m}$
+### Accuracy Metrics Across Degradation Trials (50 Canonical Runs)
+- **Overall Trajectory ATE RMSE**: **`2.102 m`** (-63.7% vs baseline 5.79 m)
+  - `room2` (Pedestrian): **`1.220 m`**
+  - `V1_01_easy` (Drone): **`1.756 m`**
+  - `V2_02_medium` (Agile Drone): **`1.831 m`**
+  - `room1` (Pedestrian): **`2.110 m`**
+  - `MH_01_easy` (Drone): **`3.593 m`**
+- **Terminal 5s Blind Cutoff RMSE**: **`2.894 m`** (-84.0% vs baseline 18.06 m, beating target 5.194 m)
+- **2s Blackout Gap RMSE**: **`1.770 m`** (-73.3% vs baseline 6.625 m, beating target 6.625 m)
+- **1-Second Relative Pose Error (RPE)**: **`0.743 m/s`** (beats stationary baseline 5/5)
+- **Verification Suite**: **`272 / 272` tests passing** (215 unit + 57 fuzz) with **`100%` sample parity** ($N_{\text{out}} \equiv N_{\text{in}}$ across all 50 runs).
 
 ---
 
@@ -94,17 +97,20 @@ Evaluated against the official competition degradation model across 150 independ
 ```text
 .
 ├── VITC_SingleThread/               # Extracted submission directory
-│   ├── main                         # Executable entrypoint (standalone python script)
-│   ├── main.py                      # Python entrypoint (standalone python script)
-│   ├── metadata.json                # Competition team & environment metadata
-│   ├── VITC_SingleThread.json       # Team identifier metadata
-│   ├── Dockerfile                   # Isolated container definition
-│   ├── README.md                    # Submission instructions
+│   ├── main                         # Standalone executable launcher
+│   ├── main.py                      # Python entrypoint (python3 main.py <in> <out>)
+│   ├── metadata.json                # Runtime benchmarks and environment metadata
 │   ├── estimated_trajectory.txt     # Verified output trajectory on baseline dataset
+│   ├── README.md                    # Submission instructions and parameter documentation
 │   └── src/
-│       ├── main.py                  # Full standalone source code
-│       ├── README.md                # Source documentation
-│       └── ref/                     # Modular reference implementations
-├── VITC_SingleThread.zip            # Self-contained competition submission archive
-└── SUBMISSION.md                    # This documentation file
+│       ├── main.py                  # 100% self-contained 15-state ESKF algorithm
+│       └── README.md                # Algorithmic notes
+├── VITC_SingleThread.zip            # Standalone competition submission archive
+├── README.md                        # Root repository execution & benchmark guide
+├── SUBMISSION.md                    # Official submission documentation
+├── AI_DISCLOSURE.md                 # Formal AI disclosure statement
+├── create_degraded_zip.py           # Degradation injection tool
+├── sample_imu.csv                   # Baseline IMU test telemetry
+├── sample_input_degraded.zip        # Pre-degraded sample archive for quick testing
+└── docs/                            # Presentation, video demo, and analysis plots
 ```
