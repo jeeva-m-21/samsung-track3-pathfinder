@@ -12,7 +12,7 @@
 - **Duration:** 3 Minutes 10 Seconds (190 Seconds)
 - **YouTube Link:** [https://youtu.be/rLN_ayVEV6g](https://youtu.be/rLN_ayVEV6g)
 - **Local Master Video File:** [`docs/video/demo_walkthrough.mp4`](demo_walkthrough.mp4) (H.264/AAC, 8.1 MB, web-optimized faststart)
-- **Slide Deck:** [`docs/presentation/VITC_SingleThread_XR_Hackathon.pptx`](../presentation/VITC_SingleThread_XR_Hackathon.pptx)
+- **Slide Deck:** [Official 9-Slide Presentation (Google Slides)](https://docs.google.com/presentation/d/1RJSXaoCRnsPSUkJOGbNYNX21EPCdQZjaV4vCF-gvLiY/edit?usp=sharing)
 
 <div align="center">
 

@@ -6,7 +6,7 @@
 **Track:** Track 03: Path Finder (IMU-Only Dead-Reckoning Under Sensor Degradation)  
 **System:** High-Performance, Zero-Dependency 15-State Error-State Kalman Filter (ESKF)  
 **Deliverables:**
-- [Official Presentation Deck (PowerPoint PPTX)](VITC_SingleThread_XR_Hackathon.pptx)
+- [Official Presentation Deck (Google Slides)](https://docs.google.com/presentation/d/1RJSXaoCRnsPSUkJOGbNYNX21EPCdQZjaV4vCF-gvLiY/edit?usp=sharing)
 - [Video Demonstration Walkthrough (YouTube)](https://youtu.be/rLN_ayVEV6g)
 - [Local MP4 Video Recording (8.1 MB)](../video/demo_walkthrough.mp4)
 
@@ -224,7 +224,7 @@ evo_ape tum groundtruth.txt estimated_trajectory.txt -a
   - GitHub: [https://github.com/jeeva-m-21/samsung-track3-pathfinder](https://github.com/jeeva-m-21/samsung-track3-pathfinder)
   - YouTube Video: [https://youtu.be/rLN_ayVEV6g](https://youtu.be/rLN_ayVEV6g)
   - Local Video: [`docs/video/demo_walkthrough.mp4`](../video/demo_walkthrough.mp4)
-  - PowerPoint Deck: [`docs/presentation/VITC_SingleThread_XR_Hackathon.pptx`](VITC_SingleThread_XR_Hackathon.pptx)
+  - Presentation Deck: [Official Slide Deck (Google Slides)](https://docs.google.com/presentation/d/1RJSXaoCRnsPSUkJOGbNYNX21EPCdQZjaV4vCF-gvLiY/edit?usp=sharing)
 
 ### Speaker Script:
 > "In conclusion, VITC_SingleThread delivers a production-grade, zero-dependency inertial dead-reckoning engine that excels across both drone flight and pedestrian locomotion under severe degradation.

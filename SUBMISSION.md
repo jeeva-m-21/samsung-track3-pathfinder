@@ -8,7 +8,7 @@ All extraneous build systems, Makefiles, unit test harnesses, and intermediate t
 1. **Extracted Folder**: `VITC_SingleThread/` (contains directly executable `./main` and `python3 main.py`)
 2. **Submission Archive**: `VITC_SingleThread.zip` (standalone competition zip package)
 3. **Video Demonstration**: [https://youtu.be/rLN_ayVEV6g](https://youtu.be/rLN_ayVEV6g) *(YouTube video walkthrough & live demo)* • Local file: [`docs/video/demo_walkthrough.mp4`](docs/video/demo_walkthrough.mp4)
-4. **Presentation Deck**: [`docs/presentation/VITC_SingleThread_XR_Hackathon.pptx`](docs/presentation/VITC_SingleThread_XR_Hackathon.pptx) *(Official 9-slide PowerPoint deck)* • Markdown script: [`docs/presentation/PRESENTATION.md`](docs/presentation/PRESENTATION.md)
+4. **Presentation Deck**: [Official 9-Slide Presentation (Google Slides)](https://docs.google.com/presentation/d/1RJSXaoCRnsPSUkJOGbNYNX21EPCdQZjaV4vCF-gvLiY/edit?usp=sharing) • Markdown script: [`docs/presentation/PRESENTATION.md`](docs/presentation/PRESENTATION.md)
 
 ---
 
