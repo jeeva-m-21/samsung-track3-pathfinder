@@ -38,7 +38,7 @@
 [![Path Finder Video Walkthrough](https://img.youtube.com/vi/rLN_ayVEV6g/maxresdefault.jpg)](https://youtu.be/rLN_ayVEV6g "Click to Watch Path Finder Video Walkthrough on YouTube")
 
 ### Video Demonstration and Presentation Deck
-**[Watch on YouTube (3m 10s)](https://youtu.be/rLN_ayVEV6g)** • **[Direct MP4 Video (8.1 MB)](docs/video/demo_walkthrough.mp4)** • **[Official Slide Deck (Google Slides)](https://docs.google.com/presentation/d/1RJSXaoCRnsPSUkJOGbNYNX21EPCdQZjaV4vCF-gvLiY/edit?usp=sharing)** • **[Presentation Script and Notes (MD)](docs/presentation/PRESENTATION.md)**
+**[▶️ Watch on YouTube](https://youtu.be/rLN_ayVEV6g)** • **[Official Slide Deck (Google Slides)](https://docs.google.com/presentation/d/1RJSXaoCRnsPSUkJOGbNYNX21EPCdQZjaV4vCF-gvLiY/edit?usp=sharing)**
 
 </div>
 
