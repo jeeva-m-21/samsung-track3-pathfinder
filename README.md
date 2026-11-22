@@ -2,14 +2,14 @@
 
 <div align="center">
 
-[![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-3776AB.svg?logo=python&logoColor=white)](https://python.org)
-[![Dependencies](https://img.shields.io/badge/Dependencies-Zero%20(Pure%20Stdlib)-brightgreen.svg)](#requirements-and-execution)
-[![Architecture](https://img.shields.io/badge/Algorithm-15--State%20ESKF-blueviolet.svg)](#system-architecture)
-[![ATE RMSE](https://img.shields.io/badge/ATE%20RMSE-2.102%20m%20(-63.7%25)-success.svg)](#50-run-evaluation-scorecard)
-[![Blind-5s RMSE](https://img.shields.io/badge/Blind--5s-2.894%20m%20(-84.0%25)-success.svg)](#50-run-evaluation-scorecard)
-[![Latency](https://img.shields.io/badge/Single--Core%20Latency-12.80%20ms%2Fs%20(78x%20RT)-informational.svg)](#single-thread-resource-profile)
-[![Memory](https://img.shields.io/badge/Peak%20RSS-23.52%20MB-informational.svg)](#single-thread-resource-profile)
-[![YouTube Video](https://img.shields.io/badge/YouTube-Video%20Demo-red.svg?logo=youtube&logoColor=white)](https://youtu.be/rLN_ayVEV6g)
+[![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)](https://python.org)
+[![Dependencies](https://img.shields.io/badge/Dependencies-Zero%20Stdlib-brightgreen)](#requirements-and-execution)
+[![Architecture](https://img.shields.io/badge/Algorithm-15--State%20ESKF-blueviolet)](#system-architecture)
+[![ATE RMSE](https://img.shields.io/badge/ATE%20RMSE-2.102%20m-success)](#50-run-evaluation-scorecard)
+[![Blind-5s RMSE](https://img.shields.io/badge/Blind--5s-2.894%20m-success)](#50-run-evaluation-scorecard)
+[![Latency](https://img.shields.io/badge/Single--Core%20Latency-12.80%20ms%2Fs-informational)](#single-thread-resource-profile)
+[![Memory](https://img.shields.io/badge/Peak%20RSS-23.52%20MB-informational)](#single-thread-resource-profile)
+[![YouTube Video](https://img.shields.io/badge/YouTube-Video%20Demo-red?logo=youtube&logoColor=white)](https://youtu.be/rLN_ayVEV6g)
 
 **Samsung Hackathon — Track 3: Path Finder**  
 *Team:* **`VITC_SingleThread`**
@@ -37,8 +37,8 @@
 
 [![Path Finder Video Walkthrough](https://img.youtube.com/vi/rLN_ayVEV6g/maxresdefault.jpg)](https://youtu.be/rLN_ayVEV6g "Click to Watch Path Finder Video Walkthrough on YouTube")
 
-### 📺 Watch the 3-Minute Walkthrough & Clean-Room Demo
-**[▶️ Stream on YouTube (3m 10s)](https://youtu.be/rLN_ayVEV6g)** • **[🎬 Direct MP4 Video (8.1 MB)](docs/video/demo_walkthrough.mp4)** • **[📊 Official Slide Deck (PowerPoint PPTX)](docs/presentation/VITC_SingleThread_XR_Hackathon.pptx)** • **[📑 Presentation Script & Notes (MD)](docs/presentation/PRESENTATION.md)**
+### Video Demonstration and Presentation Deck
+**[Watch on YouTube (3m 10s)](https://youtu.be/rLN_ayVEV6g)** • **[Direct MP4 Video (8.1 MB)](docs/video/demo_walkthrough.mp4)** • **[Official Slide Deck (PowerPoint PPTX)](docs/presentation/VITC_SingleThread_XR_Hackathon.pptx)** • **[Presentation Script and Notes (MD)](docs/presentation/PRESENTATION.md)**
 
 </div>
 
