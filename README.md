@@ -14,7 +14,7 @@
 **Samsung Hackathon — Track 3: Path Finder**  
 *Team:* **`VITC_SingleThread`**
 
-[Submission Package](#official-submission-package) • [Architecture](#system-architecture) • [Video Demo](#video-demonstration) • [Evaluation Scorecard](#50-run-evaluation-scorecard) • [Quick Start](#requirements-and-execution) • [AI Disclosure](#ai-disclosure-statement)
+[Video & Slides](#video-demonstration--presentation-deck) • [Architecture](#system-architecture) • [Benchmarks](#visual-benchmarks-and-trajectory-comparison) • [Scorecard](#50-run-evaluation-scorecard) • [Quick Start](#requirements-and-execution) • [Submission Package](#official-submission-package) • [AI Disclosure](#ai-disclosure-statement)
 
 </div>
 
@@ -28,6 +28,19 @@
 > - **Zero External Dependencies**: 100% pure Python standard library (`math`, `struct`, `array`, `zipfile`, `sys`). No `pip` install required.
 > - **Deterministic Embedded-Grade Rigor**: Runs in **`12.80 ms/s`** (78x real-time) in-process and **`16.35 ms/s`** cold CLI with ZIP unpack, using only **`23.52 MB`** peak RSS and **`2.36 MB`** heap.
 > - **Verification Rigor**: `272/272` tests passing (215 unit + 57 fuzz) with `100%` sample parity ($N_{\text{out}} \equiv N_{\text{in}}$ across all 50 evaluation runs).
+
+---
+
+## Video Demonstration & Presentation Deck
+
+<div align="center">
+
+[![Path Finder Video Walkthrough](https://img.youtube.com/vi/rLN_ayVEV6g/maxresdefault.jpg)](https://youtu.be/rLN_ayVEV6g "Click to Watch Path Finder Video Walkthrough on YouTube")
+
+### 📺 Watch the 3-Minute Walkthrough & Clean-Room Demo
+**[▶️ Stream on YouTube (3m 10s)](https://youtu.be/rLN_ayVEV6g)** • **[🎬 Direct MP4 Video (8.1 MB)](docs/video/demo_walkthrough.mp4)** • **[📊 Official Slide Deck (PowerPoint PPTX)](docs/presentation/VITC_SingleThread_XR_Hackathon.pptx)** • **[📑 Presentation Script & Notes (MD)](docs/presentation/PRESENTATION.md)**
+
+</div>
 
 ---
 
@@ -69,19 +82,6 @@ flowchart LR
 
 ### Top-Down 2D Trajectory vs Ground Truth (All 5 Competition Sequences)
 ![Top-Down 5-Sequence Trajectory Path Comparison](docs/plots/all_5_sequences_xy_comparison.png)
-
-</div>
-
----
-
-## Video Demonstration
-
-<div align="center">
-
-[![Path Finder Video Walkthrough](https://img.youtube.com/vi/rLN_ayVEV6g/maxresdefault.jpg)](https://youtu.be/rLN_ayVEV6g "Click to Watch Path Finder Video Walkthrough on YouTube")
-
-*Click the banner above to watch the full system architecture walkthrough, live single-thread terminal demo, and 50-run benchmark analysis on YouTube.*  
-**Direct Link:** [https://youtu.be/rLN_ayVEV6g](https://youtu.be/rLN_ayVEV6g)
 
 </div>
 

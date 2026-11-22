@@ -1,57 +1,76 @@
 # Video Demonstration & Walkthrough Guide
 
 **Samsung Hackathon — Track 3: Path Finder (IMU-Only Dead-Reckoning)**  
-**Team:** `VITC_SingleThread`
+**Team:** `VITC_SingleThread`  
+**Presenter:** Jeeva M (23MIS1059), Vellore Institute of Technology, Chennai
 
 ---
 
-## 1. Video Overview
+## 1. Video Overview & Direct Links
 
-- **Title:** VITC_SingleThread: Robust IMU Dead-Reckoning Under Severe Sensor Degradation
-- **Duration:** 2 Minutes 45 Seconds
-- **Video Link:** [https://youtu.be/rLN_ayVEV6g](https://youtu.be/rLN_ayVEV6g)
+- **Title:** VITC_SingleThread: High-Accuracy Inertial Dead-Reckoning Under Severe Sensor Degradation
+- **Duration:** 3 Minutes 10 Seconds (190 Seconds)
+- **YouTube Link:** [https://youtu.be/rLN_ayVEV6g](https://youtu.be/rLN_ayVEV6g)
+- **Local Master Video File:** [`docs/video/demo_walkthrough.mp4`](demo_walkthrough.mp4) (H.264/AAC, 8.1 MB, web-optimized faststart)
+- **Slide Deck:** [`docs/presentation/VITC_SingleThread_XR_Hackathon.pptx`](../presentation/VITC_SingleThread_XR_Hackathon.pptx)
 
 <div align="center">
 
-[![Path Finder Video Demonstration](https://img.youtube.com/vi/rLN_ayVEV6g/maxresdefault.jpg)](https://youtu.be/rLN_ayVEV6g "Click to Watch on YouTube")
+[![Path Finder Video Demonstration](https://img.youtube.com/vi/rLN_ayVEV6g/maxresdefault.jpg)](https://youtu.be/rLN_ayVEV6g "Click to Watch Video Demonstration on YouTube")
+
+*Click the thumbnail above to stream on YouTube, or open the local web-optimized MP4 directly: [demo_walkthrough.mp4](demo_walkthrough.mp4)*
 
 </div>
 
 ---
 
-## 2. Video Storyboard & Script Breakdown
+## 2. Video Storyboard & Technical Script Breakdown
 
-### [0:00 - 0:30] Introduction & Problem Statement
-- **Speaker:** "Welcome to our presentation for Samsung Hackathon Track 3: Path Finder. Our team is VITC_SingleThread."
-- **Visual:** Display competition problem slide: 6-axis IMU only, zero vision, zero GPS, severe noise, dropouts, and blackouts.
-- **Key Point:** Highlight why dead-reckoning diverges quadratically ($\frac{1}{2} a t^2$) and why standard filters blow out by hundreds of meters.
+### [0:00 - 0:35] Title & The Core Problem
+- **Slide Reference:** Slides 1 & 2
+- **Visual:** Hackathon Track 03 Title, Key KPIs, and the physical breakdown of pure IMU dead-reckoning.
+- **Key Concepts:** Why double integration ($\iint (a - b_a) dt^2$) diverges quadratically, uncalibrated bias drift ($> 225\text{ m}$ drift in 100s), and the 5 synthetic degradation modes (noise ramps, bias walk, dropouts, 2s blackout gaps, and terminal 5s blind cutoff).
 
-### [0:30 - 1:15] Technological Architecture
-- **Speaker:** "To conquer this, we built an embedded 15-state Error-State Kalman Filter featuring two core breakthroughs."
-- **Visual:** Screen capture showing filter architecture diagram:
-  1. *Centripetal-Compensated Tilt Alignment*: Subtraction of $\boldsymbol{\omega} \times \mathbf{v}_B$ before gravity vector normalization.
-  2. *Dual-Domain Priors*: Aerodynamic rotor drag damping for drones + gait-adaptive Weinberg stride bounding for pedestrians.
-  3. *Noise-Adaptive Process Noise*: Real-time scaling of covariance based on high-frequency noise estimation.
+### [0:35 - 1:25] Technological Solution & Filter Architecture
+- **Slide Reference:** Slides 3 & 4
+- **Visual:** End-to-end architecture pipeline diagram ([`docs/plots/architecture.png`](../plots/architecture.png)).
+- **Key Concepts:**
+  1. *Signal Pre-Cleaning*: MAD-based second-difference noise multiplier estimation ($\hat{\sigma}$).
+  2. *Student-t Robust Fusion*: Down-weighting shock impulses smoothly via residual covariance scaling.
+  3. *Regime-Adaptive Kinematic Priors*: Centripetal-compensated pedestrian tilt alignment, Weinberg stride bounding, and drone soft $v_z$ prior.
+  4. *Decoupled Blackout Extrapolation*: Curvature-preserving Simpson decay bridging the 2s gap and final 5s blind cutoff.
 
-### [1:15 - 2:05] Live Terminal Execution & Zero-Dependency Demo
-- **Speaker:** "Our pipeline is written entirely in pure Python standard library with zero external dependencies."
-- **Visual:** Live terminal recording running:
+### [1:25 - 2:10] Live Terminal Execution & Clean-Room Verification
+- **Slide Reference:** Slide 7
+- **Visual:** High-speed single-threaded execution on degraded telemetry.
+- **Commands Executed:**
   ```bash
-  # 1. Inspect bare environment (zero pip packages)
-  python3 -m pip list || echo "Zero external packages installed"
+  # 1. Zero external pip packages
+  python3 -m pip list || echo "Zero external packages required"
 
-  # 2. Run single-threaded execution on degraded input
-  /usr/bin/time -v taskset -c 0 python3 VITC_SingleThread/main.py sample_input_degraded.zip estimated_trajectory.txt
+  # 2. Pinned single-core execution with resource profiling
+  /usr/bin/time -v taskset -c 0 ./VITC_SingleThread/main evaluator_input.zip estimated_trajectory.txt
 
-  # 3. Verify evo evaluation
-  evo_ape tum groundtruth.txt estimated_trajectory.txt -a
+  # 3. Output compliance verification
+  wc -l estimated_trajectory.txt
+  head -n 5 estimated_trajectory.txt
+
+  # 4. Official evo evaluation against ground truth
+  evo_ape tum groundtruth.txt estimated_trajectory.txt -a -v
   ```
-- **Showcase:** Execution finishes in $< 1.6\text{ seconds}$ with only $23.5\text{ MB}$ peak RSS ($2.36\text{ MB}$ heap).
+- **Showcase:** Processing 27,526 samples finishes in **`1.61 s`** wall time (**`11.59 ms/s`**), consuming only **`23.9 MB`** peak RSS and **`2.36 MB`** heap. Exactly 27,526 output poses ($N_{\text{out}} \equiv N_{\text{in}}$).
 
-### [2:05 - 2:45] 50-Run Benchmark Results & Conclusion
-- **Visual:** Display summary table of 50 multi-seed runs:
-  - Overall ATE: **`2.102 m`** (-63.7% reduction vs baseline)
-  - Blind-5s Cutoff: **`2.894 m`** (-84.0% reduction)
-  - 2s Gap Blackout: **`1.770 m`** (-73.3% reduction)
-  - Single-Core Latency: **`12.80 ms/s`** (78x real-time, well below $20\text{ ms/s}$ limit).
-- **Speaker:** "With zero heap churn, zero third-party dependencies, and verified multi-seed generalization, VITC_SingleThread delivers robust, production-grade inertial dead-reckoning."
+### [2:10 - 2:50] 50-Run Benchmark Results & Physical Differentiation
+- **Slide Reference:** Slides 5 & 6
+- **Visual:** Budget compliance chart ([`slide5_budget_share.png`](../ppt_handoff/slide5_budget_share.png)) and V2_02 Before/After progression ([`slide6_v202_before_after.png`](../ppt_handoff/slide6_v202_before_after.png)).
+- **Key Metrics Highlighted:**
+  - Overall ATE: **`2.102 m`** (−63.7% vs baseline 5.79 m).
+  - Terminal 5s Blind Cutoff: **`2.894 m`** (−84.0% vs baseline 18.06 m).
+  - 2s Gap Blackout: **`1.770 m`** (−73.3% vs baseline 6.63 m).
+  - Local 1-second RPE: **`0.743 m/s`** (beats stationary baseline 5/5).
+  - Agile flight stabilization: `V2_02_medium` ATE from $10.59\text{ m} \to 1.83\text{ m}$ (−83%), preserving 84.9% physical path scale.
+
+### [2:50 - 3:10] Ablation Gates, Engineering Rigor & Conclusion
+- **Slide Reference:** Slides 8 & 9
+- **Visual:** Stepwise ablation chart ([`slide8_ablation.png`](../ppt_handoff/slide8_ablation.png)) and Contact / Submission summary.
+- **Key Takeaways:** 272/272 passing tests, disciplined rejection of non-generalizing hypotheses (body rotor drag, RTS smoother), production-grade zero-dependency stdlib code.
