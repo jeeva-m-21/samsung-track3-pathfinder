@@ -62,7 +62,7 @@
 
 ### [2:10 - 2:50] 50-Run Benchmark Results & Physical Differentiation
 - **Slide Reference:** Slides 5 & 6
-- **Visual:** Budget compliance chart ([`slide5_budget_share.png`](../ppt_handoff/slide5_budget_share.png)) and V2_02 Before/After progression ([`slide6_v202_before_after.png`](../ppt_handoff/slide6_v202_before_after.png)).
+- **Visual:** Benchmark Scorecard (Slide 5) and V2_02 Agile Flight progression (Slide 6).
 - **Key Metrics Highlighted:**
   - Overall ATE: **`2.102 m`** (−63.7% vs baseline 5.79 m).
   - Terminal 5s Blind Cutoff: **`2.894 m`** (−84.0% vs baseline 18.06 m).
@@ -72,5 +72,5 @@
 
 ### [2:50 - 3:10] Ablation Gates, Engineering Rigor & Conclusion
 - **Slide Reference:** Slides 8 & 9
-- **Visual:** Stepwise ablation chart ([`slide8_ablation.png`](../ppt_handoff/slide8_ablation.png)) and Contact / Submission summary.
+- **Visual:** Stepwise ablation progression (Slide 8) and Contact / Submission summary (Slide 9).
 - **Key Takeaways:** 272/272 passing tests, disciplined rejection of non-generalizing hypotheses (body rotor drag, RTS smoother), production-grade zero-dependency stdlib code.

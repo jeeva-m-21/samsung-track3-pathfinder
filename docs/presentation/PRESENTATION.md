@@ -109,7 +109,8 @@
 ## Slide 5: Track Final Output — All Track 03 Budgets Met With Margin
 
 ### Slide Visual:
-![Budget Compliance Share](../ppt_handoff/slide5_budget_share.png)
+- **Title:** PERFORMANCE SCORECARD — BENCHMARK RESULTS
+- **Scorecard Overview:** Single-thread resource profile and 50-run benchmark metrics.
 
 #### 50-Run Benchmark Scorecard (SE(3) Alignment):
 
@@ -135,7 +136,8 @@
 ## Slide 6: Differentiation — Diagnostic Physics Over Black-Box Heuristics
 
 ### Slide Visual:
-![V2_02 Before/After](../ppt_handoff/slide6_v202_before_after.png)
+- **Title:** PHYSICAL DIAGNOSTICS & HARDENING
+- **Comparative Trajectories:** Agile 3D Flight stabilization and pedestrian heading lock.
 
 1. **Agile 3D Flight Stabilization (`V2_02_medium`):**
    - Trajectory ATE dropped from **`10.59 m → 1.83 m`** (**`−83%`**).
@@ -188,8 +190,8 @@ evo_ape tum groundtruth.txt estimated_trajectory.txt -a
 ## Slide 8: Trajectory Proof & Stepwise Ablation
 
 ### Slide Visual:
-![Stepwise Ablation Progression](../ppt_handoff/slide8_ablation.png)
-![Official EVO Map V2_02](../ppt_handoff/evo_map_V2_02.png)
+- **Title:** STEPWISE ABLATION & EMPIRICAL PROOF
+- **Ablation Progression:** Stepwise error reduction across each filter enhancement.
 
 - **Stepwise Performance Progression:**
   - `Initial Baseline`: $2.94\text{ m}$ ATE / $4.40\text{ m}$ Blind-5s / $2.64\text{ m}$ Gap-2s

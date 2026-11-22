@@ -15,7 +15,6 @@ src/build/
 src/cpp/build/
 *.zip
 !VITC_SingleThread.zip
-!sample_input_degraded.zip
 !VITC_SingleThread/main
 
 # Python & Environment
