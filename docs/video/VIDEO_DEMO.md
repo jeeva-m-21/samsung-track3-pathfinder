@@ -9,7 +9,13 @@
 
 - **Title:** VITC_SingleThread: Robust IMU Dead-Reckoning Under Severe Sensor Degradation
 - **Duration:** 2 Minutes 45 Seconds
-- **Video Link:** `https://youtu.be/placeholder-vitc-singlethread-demo` *(or uploaded MP4 in presentation portal)*
+- **Video Link:** [https://youtu.be/rLN_ayVEV6g](https://youtu.be/rLN_ayVEV6g)
+
+<div align="center">
+
+[![Path Finder Video Demonstration](https://img.youtube.com/vi/rLN_ayVEV6g/maxresdefault.jpg)](https://youtu.be/rLN_ayVEV6g "Click to Watch on YouTube")
+
+</div>
 
 ---
 

@@ -9,11 +9,12 @@
 [![Blind-5s RMSE](https://img.shields.io/badge/Blind--5s-2.894%20m%20(-84.0%25)-success.svg)](#50-run-evaluation-scorecard)
 [![Latency](https://img.shields.io/badge/Single--Core%20Latency-12.80%20ms%2Fs%20(78x%20RT)-informational.svg)](#single-thread-resource-profile)
 [![Memory](https://img.shields.io/badge/Peak%20RSS-23.52%20MB-informational.svg)](#single-thread-resource-profile)
+[![YouTube Video](https://img.shields.io/badge/YouTube-Video%20Demo-red.svg?logo=youtube&logoColor=white)](https://youtu.be/rLN_ayVEV6g)
 
 **Samsung Hackathon — Track 3: Path Finder**  
 *Team:* **`VITC_SingleThread`**
 
-[Submission Package](#official-submission-package) • [Architecture](#system-architecture) • [Evaluation Scorecard](#50-run-evaluation-scorecard) • [Quick Start](#requirements-and-execution) • [AI Disclosure](#ai-disclosure-statement)
+[Submission Package](#official-submission-package) • [Architecture](#system-architecture) • [Video Demo](#video-demonstration) • [Evaluation Scorecard](#50-run-evaluation-scorecard) • [Quick Start](#requirements-and-execution) • [AI Disclosure](#ai-disclosure-statement)
 
 </div>
 
@@ -68,6 +69,19 @@ flowchart LR
 
 ### Top-Down 2D Trajectory vs Ground Truth (All 5 Competition Sequences)
 ![Top-Down 5-Sequence Trajectory Path Comparison](docs/plots/all_5_sequences_xy_comparison.png)
+
+</div>
+
+---
+
+## Video Demonstration
+
+<div align="center">
+
+[![Path Finder Video Walkthrough](https://img.youtube.com/vi/rLN_ayVEV6g/maxresdefault.jpg)](https://youtu.be/rLN_ayVEV6g "Click to Watch Path Finder Video Walkthrough on YouTube")
+
+*Click the banner above to watch the full system architecture walkthrough, live single-thread terminal demo, and 50-run benchmark analysis on YouTube.*  
+**Direct Link:** [https://youtu.be/rLN_ayVEV6g](https://youtu.be/rLN_ayVEV6g)
 
 </div>
 

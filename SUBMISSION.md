@@ -7,6 +7,7 @@ This directory is prepared for official submission and verification of **VITC_Si
 All extraneous build systems, Makefiles, unit test harnesses, and intermediate tuning scripts have been removed. The submission is packaged both as:
 1. **Extracted Folder**: `VITC_SingleThread/` (contains directly executable `./main` and `python3 main.py`)
 2. **Submission Archive**: `VITC_SingleThread.zip` (standalone competition zip package)
+3. **Video Demonstration**: [https://youtu.be/rLN_ayVEV6g](https://youtu.be/rLN_ayVEV6g) *(YouTube video walkthrough & live demo)*
 
 ---
 
