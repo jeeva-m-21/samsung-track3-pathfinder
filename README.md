@@ -34,6 +34,10 @@
 
 A compact, streaming 15-state Error-State Kalman Filter (ESKF) pipeline engineered for zero dynamic heap churn and maximum resilience:
 
+<div align="center">
+  <img src="docs/plots/architecture.png" alt="VITC_SingleThread 15-State ESKF Pipeline Architecture" width="100%">
+</div>
+
 ```mermaid
 flowchart LR
     A["<b>Raw IMU</b><br/>(200 Hz Telemetry)"] --> B["<b>Signal Front-End</b><br/>Spike filter & noise tracking"]
@@ -62,8 +66,8 @@ flowchart LR
 ### Overall Multi-Seed Error Comparison (50 Runs across 5 Sequences)
 ![Overall Multi-Seed Benchmark](docs/plots/benchmark_comparison.png)
 
-### Top-Down 2D Flight Path vs Ground Truth (EuRoC MH_01)
-![Top-Down Flight Path Comparison](docs/plots/trajectory_xy_comparison.png)
+### Top-Down 2D Trajectory vs Ground Truth (All 5 Competition Sequences)
+![Top-Down 5-Sequence Trajectory Path Comparison](docs/plots/all_5_sequences_xy_comparison.png)
 
 </div>
 
